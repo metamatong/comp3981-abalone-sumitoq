@@ -68,8 +68,6 @@ button:disabled{opacity:.4;cursor:default}
   font-size:11px;text-transform:uppercase;letter-spacing:1px;
   color:#5a7890;margin-bottom:6px;
 }
-#selection-info{font-size:12px;color:#99a;line-height:1.5}
-#selection-info .sel-positions{color:#5bc0f0;font-weight:600}
 #history-list{
   max-height:360px;overflow-y:auto;font-size:11px;
   font-family:'SF Mono',Consolas,monospace;
@@ -119,10 +117,6 @@ button:disabled{opacity:.4;cursor:default}
     </div>
   </div>
   <div id="side-panel">
-    <div class="panel-section">
-      <h3>Selection</h3>
-      <div id="selection-info">Click your marbles to select, then click a destination.</div>
-    </div>
     <div class="panel-section">
       <h3>Move History</h3>
       <div id="history-list"></div>
@@ -280,7 +274,6 @@ function render() {
   renderScore();
   renderTurn();
   renderBoard();
-  renderSelection();
   renderHistory();
   if (state.game_over) showGameOver();
 }
@@ -436,20 +429,6 @@ function cell(x, y, r, c, ps, val, sel, dst) {
   }
 
   return h;
-}
-
-/* ── Selection info ────────────────────────────────────── */
-function renderSelection() {
-  const el = document.getElementById('selection-info');
-  if (!selected.length) {
-    el.innerHTML = 'Click your marbles to select, then click a destination.';
-    return;
-  }
-  const dests = getValidDestinations();
-  const n = Object.keys(dests).length;
-  el.innerHTML = `Selected: <span class="sel-positions">${selected.join(', ')}</span><br>
-    <span style="color:#6a8">${n} destination${n!==1?'s':''} available</span>
-    ${n ? '<br><span style="color:#556">Click a highlighted cell to move.</span>' : ''}`;
 }
 
 /* ── History ───────────────────────────────────────────── */
