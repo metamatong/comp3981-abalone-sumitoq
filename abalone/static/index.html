@@ -436,9 +436,10 @@ function renderHistory() {
   for (let i = state.history.length - 1; i >= 0; i--) {
     const e = state.history[i];
     const sym = e.player===BLACK ? '●' : '○';
+    const symColor = e.player===BLACK ? '#555' : '#eee';
     h += `<div class="history-entry">
       <span class="history-num">${i+1}.</span>
-      <span class="history-player">${sym}</span>
+      <span class="history-player" style="color:${symColor}">${sym}</span>
       <span class="history-move">${e.notation}</span>
       ${e.pushoff ? '<span class="history-push">pushed off!</span>' : ''}
     </div>`;
