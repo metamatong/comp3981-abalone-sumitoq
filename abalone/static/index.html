@@ -112,7 +112,6 @@ button:disabled{opacity:.4;cursor:default}
     <svg id="board" width="640" height="540"></svg>
     <div class="btn-row">
       <button class="primary" onclick="doUndo()">Undo</button>
-      <button class="primary" onclick="clearSelection()">Clear</button>
       <button class="danger" onclick="doReset()">New Game</button>
     </div>
   </div>
@@ -230,8 +229,6 @@ function isLine(sel) {
   }
   return true;
 }
-
-function clearSelection() { selected = []; render(); }
 
 /* ── Destination map ───────────────────────────────────── */
 function getValidDestinations() {
