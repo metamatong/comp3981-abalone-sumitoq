@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Abalone</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#0f1923;color:#e0e0e0;
+  font-family:'Segoe UI',system-ui,sans-serif;
+  display:flex;justify-content:center;align-items:flex-start;
+  min-height:100vh;padding:20px;
+}
+#app{display:flex;gap:24px;align-items:flex-start}
+#board-panel{display:flex;flex-direction:column;align-items:center}
+#side-panel{width:250px;display:flex;flex-direction:column;gap:14px;padding-top:8px}
+
+h1{
+  font-size:24px;font-weight:700;letter-spacing:3px;
+  margin-bottom:10px;color:#e8e8e8;text-align:center;
+}
+
+/* ── Score ──────────────────────────────────────────────── */
+#score-bar{
+  display:flex;align-items:center;justify-content:center;
+  gap:16px;font-size:14px;margin-bottom:6px;
+}
+.score-block{
+  display:flex;align-items:center;gap:8px;
+  padding:5px 12px;border-radius:8px;
+}
+.score-black{background:#1e2a36}
+.score-white{background:#2a3040}
+.score-marble{width:16px;height:16px;border-radius:50%;display:inline-block}
+.score-marble.black{background:radial-gradient(circle at 35% 35%,#555,#111)}
+.score-marble.white{background:radial-gradient(circle at 35% 35%,#fff,#aaa)}
+.score-num{font-size:20px;font-weight:700}
+.score-lost{font-size:11px;color:#667}
+
+/* ── Turn ──────────────────────────────────────────────── */
+#turn-indicator{
+  text-align:center;font-size:13px;margin-bottom:4px;
+  padding:4px 12px;border-radius:6px;
+}
+#turn-indicator.black-turn{background:#1e2a36;color:#ccc}
+#turn-indicator.white-turn{background:#2a3040;color:#eee}
+
+/* ── SVG ───────────────────────────────────────────────── */
+svg#board{cursor:default;display:block}
+
+/* ── Buttons ───────────────────────────────────────────── */
+.btn-row{display:flex;gap:8px;justify-content:center;margin-top:6px}
+button{
+  padding:6px 14px;border:none;border-radius:6px;
+  font-size:12px;cursor:pointer;font-weight:600;
+  transition:background .15s;
+}
+button.primary{background:#3d6b99;color:#fff}
+button.primary:hover{background:#4d80b5}
+button.danger{background:#994444;color:#fff}
+button.danger:hover{background:#b55555}
+button:disabled{opacity:.4;cursor:default}
+
+/* ── Side panel ────────────────────────────────────────── */
+.panel-section{background:#141e2b;border-radius:8px;padding:12px}
+.panel-section h3{
+  font-size:11px;text-transform:uppercase;letter-spacing:1px;
+  color:#5a7890;margin-bottom:6px;
+}
+#selection-info{font-size:12px;color:#99a;line-height:1.5}
+#selection-info .sel-positions{color:#5bc0f0;font-weight:600}
+#history-list{
+  max-height:360px;overflow-y:auto;font-size:11px;
+  font-family:'SF Mono',Consolas,monospace;
+}
+#history-list::-webkit-scrollbar{width:4px}
+#history-list::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+.history-entry{
+  padding:2px 0;display:flex;gap:6px;
+  border-bottom:1px solid #1a2535;
+}
+.history-num{color:#445;min-width:22px;text-align:right}
+.history-player{min-width:12px}
+.history-move{color:#7aa}
+.history-push{color:#e87;font-weight:600}
+
+/* ── Game over ─────────────────────────────────────────── */
+#game-over{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,.75);
+  justify-content:center;align-items:center;z-index:10;
+}
+#game-over.show{display:flex}
+#game-over-box{
+  background:#141e2b;padding:36px 48px;border-radius:14px;
+  text-align:center;border:2px solid #3d6b99;
+}
+#game-over-box h2{font-size:28px;margin-bottom:10px}
+#game-over-box p{margin-bottom:16px;color:#99a}
+
+/* ── Help ──────────────────────────────────────────────── */
+#help-text{font-size:11px;color:#667;line-height:1.6}
+#help-text b{color:#99a}
+</style>
+</head>
+
+<body>
+<div id="app">
+  <div id="board-panel">
+    <h1>ABALONE</h1>
+    <div id="score-bar"></div>
+    <div id="turn-indicator"></div>
+    <svg id="board" width="640" height="540"></svg>
+    <div class="btn-row">
+      <button class="primary" onclick="doUndo()">Undo</button>
+      <button class="primary" onclick="clearSelection()">Clear</button>
+      <button class="danger" onclick="doReset()">New Game</button>
+    </div>
+  </div>
+  <div id="side-panel">
+    <div class="panel-section">
+      <h3>Selection</h3>
+      <div id="selection-info">Click your marbles to select, then click a destination.</div>
+    </div>
+    <div class="panel-section">
+      <h3>Move History</h3>
+      <div id="history-list"></div>
+    </div>
+    <div class="panel-section">
+      <h3>How to play</h3>
+      <div id="help-text">
+        <b>Select</b> 1–3 of your marbles in a line.<br>
+        <b>Click a highlighted cell</b> to move.<br><br>
+        <b>Sumito:</b> push opponent marbles when you outnumber them inline.<br>
+        <b>Win:</b> push 6 opponent marbles off the board.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="game-over">
+  <div id="game-over-box">
+    <h2 id="go-title"></h2>
+    <p id="go-sub"></p>
+    <button class="primary" onclick="doReset()">Play Again</button>
+  </div>
+</div>
+
+<script>
+const BLACK = 1, WHITE = 2, EMPTY = 0;
+const ROWS = 'abcdefghi';
+const DIRECTIONS = [[0,1],[0,-1],[1,0],[-1,0],[1,1],[-1,-1]];
+
+/* Build set of valid positions */
+const VALID = [];
+for (let r = 0; r < 9; r++) {
+  const cmin = r <= 4 ? 1 : r - 3;
+  const cmax = r <= 4 ? 5 + r : 9;
+  for (let c = cmin; c <= cmax; c++) VALID.push([r, c]);
+}
+
+/* ── Hex geometry ──────────────────────────────────────── */
+const R     = 26;                // marble radius
+const H_SP  = R * 2.2;          // horizontal cell spacing
+const V_SP  = R * 1.9;          // vertical row spacing
+const CX    = 320;              // SVG center x
+const CY    = 270;              // SVG center y
+
+function hexPx(r, c) {
+  // e5 (r=4,c=5) is board center: c - r/2 = 3, so offset by 3
+  return {
+    x: CX + H_SP * (c - r / 2 - 3),
+    y: CY - V_SP * (r - 4),
+  };
+}
+
+function posKey(r, c) { return ROWS[r] + c; }
+function parsePos(s) { return [ROWS.indexOf(s[0]), parseInt(s[1])]; }
+
+/* ── State ─────────────────────────────────────────────── */
+let state    = null;
+let selected = [];
+
+/* ── API ───────────────────────────────────────────────── */
+async function fetchState() {
+  state = await (await fetch('/api/state')).json();
+  render();
+}
+async function doMove(m) {
+  const d = await (await fetch('/api/move', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(m),
+  })).json();
+  if (d.error) return;
+  selected = [];
+  await fetchState();
+}
+async function doUndo()  { await fetch('/api/undo',{method:'POST'});  selected=[]; await fetchState(); }
+async function doReset() {
+  document.getElementById('game-over').classList.remove('show');
+  await fetch('/api/reset',{method:'POST'}); selected=[]; await fetchState();
+}
+
+/* ── Selection ─────────────────────────────────────────── */
+function toggleSelect(ps) {
+  if (state.game_over) return;
+  const val = state.cells[ps];
+
+  /* Clicked opponent or empty → try as destination */
+  if (val !== state.current_player) {
+    const dests = getValidDestinations();
+    if (dests[ps]) { doMove(dests[ps]); }
+    else { selected = []; render(); }
+    return;
+  }
+
+  /* Toggle own marble */
+  const idx = selected.indexOf(ps);
+  if (idx >= 0) { selected.splice(idx, 1); }
+  else {
+    if (selected.length >= 3) return;
+    selected.push(ps);
+    if (selected.length > 1 && !isLine(selected)) selected.pop();
+  }
+  render();
+}
+
+function isLine(sel) {
+  if (sel.length <= 1) return true;
+  const pts = sel.map(parsePos).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const d = [pts[1][0]-pts[0][0], pts[1][1]-pts[0][1]];
+  if (!DIRECTIONS.some(dd=>dd[0]===d[0]&&dd[1]===d[1])) return false;
+  for (let i = 2; i < pts.length; i++) {
+    if (pts[i][0]!==pts[0][0]+i*d[0] || pts[i][1]!==pts[0][1]+i*d[1]) return false;
+  }
+  return true;
+}
+
+function clearSelection() { selected = []; render(); }
+
+/* ── Destination map ───────────────────────────────────── */
+function getValidDestinations() {
+  if (!selected.length || !state) return {};
+  const dests = {};
+  for (const lm of state.legal_moves) {
+    const mset = new Set(lm.marbles);
+    if (mset.size !== selected.length) continue;
+    if (!selected.every(s => mset.has(s))) continue;
+
+    const [dr, dc] = lm.direction;
+
+    /* For broadside: every destination cell that is NOT already in the group */
+    const destCells = lm.marbles.map(m => {
+      const [r,c] = parsePos(m);
+      return posKey(r+dr, c+dc);
+    });
+    for (const d of destCells) {
+      if (!mset.has(d)) dests[d] = lm;
+    }
+
+    /* For inline: also mark the goal cell (where leading marble ends up) */
+    if (lm.is_inline) {
+      let best = lm.marbles[0], bestDot = -Infinity;
+      for (const m of lm.marbles) {
+        const [r,c] = parsePos(m);
+        const dot = r*dr + c*dc;
+        if (dot > bestDot) { bestDot = dot; best = m; }
+      }
+      const [lr,lc] = parsePos(best);
+      dests[posKey(lr+dr, lc+dc)] = lm;
+    }
+  }
+  return dests;
+}
+
+/* ── Render ────────────────────────────────────────────── */
+function render() {
+  if (!state) return;
+  renderScore();
+  renderTurn();
+  renderBoard();
+  renderSelection();
+  renderHistory();
+  if (state.game_over) showGameOver();
+}
+
+function renderScore() {
+  document.getElementById('score-bar').innerHTML = `
+    <div class="score-block score-black">
+      <span class="score-marble black"></span>
+      <span class="score-num">${state.score['1']}</span>
+      <span class="score-lost">captured</span>
+    </div>
+    <span style="color:#445;font-size:12px">vs</span>
+    <div class="score-block score-white">
+      <span class="score-marble white"></span>
+      <span class="score-num">${state.score['2']}</span>
+      <span class="score-lost">captured</span>
+    </div>`;
+}
+
+function renderTurn() {
+  const el = document.getElementById('turn-indicator');
+  const b = state.current_player === BLACK;
+  el.className = b ? 'black-turn' : 'white-turn';
+  el.textContent = b
+    ? `● Black's turn  (${state.marble_counts['1']} marbles)`
+    : `○ White's turn  (${state.marble_counts['2']} marbles)`;
+}
+
+/* ── Board SVG ─────────────────────────────────────────── */
+function renderBoard() {
+  const svg = document.getElementById('board');
+  const dests = getValidDestinations();
+  let h = '';
+
+  /* ── Defs: shared gradients ── */
+  h += `<defs>
+    <radialGradient id="gBlack" cx="38%" cy="32%" r="55%">
+      <stop offset="0%" stop-color="#606060"/>
+      <stop offset="100%" stop-color="#0a0a0a"/>
+    </radialGradient>
+    <radialGradient id="gWhite" cx="38%" cy="32%" r="55%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#9999a0"/>
+    </radialGradient>
+    <radialGradient id="gPit" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e3040"/>
+      <stop offset="100%" stop-color="#162230"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity=".5"/>
+    </filter>
+  </defs>`;
+
+  /* ── Board background hex ── */
+  h += boardHex();
+
+  /* ── Cells ── */
+  for (const [r, c] of VALID) {
+    const ps  = posKey(r, c);
+    const {x, y} = hexPx(r, c);
+    const val = state.cells[ps] ?? EMPTY;
+    const sel = selected.includes(ps);
+    const dst = ps in dests;
+    h += cell(x, y, r, c, ps, val, sel, dst);
+  }
+
+  /* ── Edge labels: row letters on both sides ── */
+  for (let r = 0; r < 9; r++) {
+    const cmin = r <= 4 ? 1 : r - 3;
+    const cmax = r <= 4 ? 5 + r : 9;
+    const letter = ROWS[r].toUpperCase();
+    const left  = hexPx(r, cmin);
+    const right = hexPx(r, cmax);
+    h += `<text x="${left.x - R - 16}" y="${left.y + 5}" text-anchor="middle"
+      font-size="14" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
+    h += `<text x="${right.x + R + 16}" y="${right.y + 5}" text-anchor="middle"
+      font-size="14" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
+  }
+
+  /* ── Column numbers along bottom-left diagonal (row a) ── */
+  for (let c = 1; c <= 5; c++) {
+    const {x, y} = hexPx(0, c);
+    h += `<text x="${x}" y="${y + R + 18}" text-anchor="middle"
+      font-size="13" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
+  }
+  /* ── Column numbers along top-right diagonal (row i) ── */
+  for (let c = 5; c <= 9; c++) {
+    const {x, y} = hexPx(8, c);
+    h += `<text x="${x}" y="${y - R - 10}" text-anchor="middle"
+      font-size="13" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
+  }
+
+  svg.innerHTML = h;
+}
+
+function boardHex() {
+  /* The board IS a hexagon with 6 corner cells:
+     i5 (top-left), i9 (top-right), e9 (right),
+     a5 (bottom-right), a1 (bottom-left), e1 (left) */
+  const pad = R + 12;
+  const corners = [
+    hexPx(8, 5),  // i5
+    hexPx(8, 9),  // i9
+    hexPx(4, 9),  // e9
+    hexPx(0, 5),  // a5
+    hexPx(0, 1),  // a1
+    hexPx(4, 1),  // e1
+  ];
+  /* Push each corner outward from board center */
+  const pts = corners.map(c => {
+    const dx = c.x - CX, dy = c.y - CY;
+    const len = Math.hypot(dx, dy);
+    return [c.x + dx / len * pad, c.y + dy / len * pad];
+  });
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < 6; i++) d += `L${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
+  d += 'Z';
+  return `<path d="${d}" fill="#1a2d3d" stroke="#2a4050" stroke-width="2.5"/>`;
+}
+
+function cell(x, y, r, c, ps, val, sel, dst) {
+  let h = '';
+  const click = `onclick="toggleSelect('${ps}')"`;
+
+  /* Pit (indentation) */
+  h += `<circle cx="${x}" cy="${y}" r="${R}" fill="url(#gPit)"
+    stroke="#1a2a36" stroke-width="1" ${click} style="cursor:pointer"/>`;
+
+  if (val === BLACK || val === WHITE) {
+    const grad = val === BLACK ? 'url(#gBlack)' : 'url(#gWhite)';
+    const strokeNorm = val === BLACK ? '#000' : '#888';
+    h += `<circle cx="${x}" cy="${y}" r="${R-3}" fill="${grad}"
+      stroke="${sel ? '#4fc3f7' : strokeNorm}" stroke-width="${sel ? 3 : 1.2}"
+      filter="url(#shadow)" ${click} style="cursor:pointer"/>`;
+    if (sel) {
+      h += `<circle cx="${x}" cy="${y}" r="${R+1}" fill="none"
+        stroke="#4fc3f7" stroke-width="2" opacity=".55" style="pointer-events:none"/>`;
+    }
+  } else {
+    /* Empty — show coordinate */
+    h += `<text x="${x}" y="${y+4}" text-anchor="middle"
+      font-size="11" fill="#3e6070" font-family="monospace" font-weight="600"
+      ${click} style="cursor:pointer;pointer-events:all">${ps}</text>`;
+  }
+
+  /* Destination glow */
+  if (dst) {
+    h += `<circle cx="${x}" cy="${y}" r="${R-1}" fill="#4fc3f7" opacity=".18"
+      stroke="#4fc3f7" stroke-width="2.5" stroke-dasharray="${val!==EMPTY?'0':'4 3'}"
+      ${click} style="cursor:pointer"/>`;
+    h += `<circle cx="${x}" cy="${y}" r="5" fill="#4fc3f7" opacity=".9"
+      ${click} style="cursor:pointer"/>`;
+  }
+
+  return h;
+}
+
+/* ── Selection info ────────────────────────────────────── */
+function renderSelection() {
+  const el = document.getElementById('selection-info');
+  if (!selected.length) {
+    el.innerHTML = 'Click your marbles to select, then click a destination.';
+    return;
+  }
+  const dests = getValidDestinations();
+  const n = Object.keys(dests).length;
+  el.innerHTML = `Selected: <span class="sel-positions">${selected.join(', ')}</span><br>
+    <span style="color:#6a8">${n} destination${n!==1?'s':''} available</span>
+    ${n ? '<br><span style="color:#556">Click a highlighted cell to move.</span>' : ''}`;
+}
+
+/* ── History ───────────────────────────────────────────── */
+function renderHistory() {
+  const el = document.getElementById('history-list');
+  if (!state.history.length) { el.innerHTML='<span style="color:#334">No moves yet.</span>'; return; }
+  let h = '';
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const e = state.history[i];
+    const sym = e.player===BLACK ? '●' : '○';
+    h += `<div class="history-entry">
+      <span class="history-num">${i+1}.</span>
+      <span class="history-player">${sym}</span>
+      <span class="history-move">${e.notation}</span>
+      ${e.pushoff ? '<span class="history-push">pushed off!</span>' : ''}
+    </div>`;
+  }
+  el.innerHTML = h;
+}
+
+/* ── Game over ─────────────────────────────────────────── */
+function showGameOver() {
+  document.getElementById('go-title').textContent =
+    (state.score['1']>=6?'Black':'White') + ' Wins!';
+  document.getElementById('go-sub').textContent =
+    `Score: ${state.score['1']} – ${state.score['2']}`;
+  document.getElementById('game-over').classList.add('show');
+}
+
+/* ── Init ──────────────────────────────────────────────── */
+fetchState();
+</script>
+</body>
+</html>
