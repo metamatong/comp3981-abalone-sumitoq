@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from .board import (
     Board, Move, BLACK, WHITE, EMPTY,
@@ -16,10 +17,35 @@ board = Board()
 board.setup_standard()
 current_player = BLACK
 move_history = []          # list of {move, result, snapshot, player}
+INITIAL_TIME_MS = 30 * 60 * 1000
+time_left_ms = {BLACK: INITIAL_TIME_MS, WHITE: INITIAL_TIME_MS}
+last_clock_update_ms = int(time.time() * 1000)
+
+
+def _now_ms():
+    return int(time.time() * 1000)
+
+
+def _tick_clock():
+    """Deduct elapsed wall-clock time from the current player's timer."""
+    global last_clock_update_ms
+    now = _now_ms()
+    elapsed = max(0, now - last_clock_update_ms)
+
+    # Stop decrementing clocks after score-based game end.
+    if board.score[BLACK] >= 6 or board.score[WHITE] >= 6:
+        last_clock_update_ms = now
+        return
+
+    if elapsed > 0:
+        time_left_ms[current_player] = max(0, time_left_ms[current_player] - elapsed)
+    last_clock_update_ms = now
 
 
 def _state_json():
     """Serialize current game state to a JSON-friendly dict."""
+    _tick_clock()
+
     cells = {}
     for pos, val in board.cells.items():
         cells[pos_to_str(pos)] = val
@@ -55,11 +81,18 @@ def _state_json():
             BLACK: board.marble_count(BLACK),
             WHITE: board.marble_count(WHITE),
         },
+        'time_left_ms': {
+            BLACK: time_left_ms[BLACK],
+            WHITE: time_left_ms[WHITE],
+        },
+        'initial_time_ms': INITIAL_TIME_MS,
     }
 
 
 def _apply_move(data):
-    global current_player
+    global current_player, last_clock_update_ms
+    _tick_clock()
+
     marbles = tuple(str_to_pos(s) for s in data['marbles'])
     direction = tuple(data['direction'])
     move = Move(marbles=marbles, direction=direction)
@@ -68,33 +101,40 @@ def _apply_move(data):
         return {'error': 'Illegal move'}
 
     snapshot = board.copy()
+    clock_snapshot = dict(time_left_ms)
     result = board.apply_move(move, current_player)
     move_history.append({
         'move': move,
         'result': result,
         'snapshot': snapshot,
+        'clock_snapshot': clock_snapshot,
         'player': current_player,
     })
     current_player = WHITE if current_player == BLACK else BLACK
+    last_clock_update_ms = _now_ms()
     return {'ok': True, 'result': result}
 
 
 def _undo():
-    global current_player, board
+    global current_player, board, time_left_ms, last_clock_update_ms
     if not move_history:
         return {'error': 'Nothing to undo'}
     entry = move_history.pop()
     board = entry['snapshot']
     current_player = entry['player']
+    time_left_ms = dict(entry['clock_snapshot'])
+    last_clock_update_ms = _now_ms()
     return {'ok': True}
 
 
 def _reset():
-    global current_player, board, move_history
+    global current_player, board, move_history, time_left_ms, last_clock_update_ms
     board = Board()
     board.setup_standard()
     current_player = BLACK
     move_history = []
+    time_left_ms = {BLACK: INITIAL_TIME_MS, WHITE: INITIAL_TIME_MS}
+    last_clock_update_ms = _now_ms()
     return {'ok': True}
 
 

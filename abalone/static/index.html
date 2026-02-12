@@ -21,6 +21,29 @@ h1{
   margin-bottom:10px;color:#e8e8e8;text-align:center;
 }
 
+/* ── Clocks ─────────────────────────────────────────────── */
+#clock-bar{
+  display:flex;align-items:center;justify-content:center;
+  gap:12px;margin-bottom:8px;
+}
+.clock-box{
+  min-width:154px;
+  padding:8px 12px;border-radius:8px;
+  background:#162331;border:1px solid #22364a;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.clock-box.active{
+  border-color:#4fc3f7;
+  box-shadow:0 0 0 1px rgba(79,195,247,.35) inset;
+}
+.clock-player{
+  font-size:12px;letter-spacing:.3px;color:#8ea7ba;
+}
+.clock-time{
+  font-size:22px;font-weight:700;letter-spacing:1px;
+  font-family:'SF Mono',Consolas,monospace;color:#dce7ef;
+}
+
 /* ── Score ──────────────────────────────────────────────── */
 #score-bar{
   display:flex;align-items:center;justify-content:center;
@@ -107,6 +130,7 @@ button:disabled{opacity:.4;cursor:default}
 <div id="app">
   <div id="board-panel">
     <h1>ABALONE</h1>
+    <div id="clock-bar"></div>
     <div id="score-bar"></div>
     <div id="turn-indicator"></div>
     <svg id="board" width="640" height="540"></svg>
@@ -174,10 +198,12 @@ function parsePos(s) { return [ROWS.indexOf(s[0]), parseInt(s[1])]; }
 /* ── State ─────────────────────────────────────────────── */
 let state    = null;
 let selected = [];
+let stateFetchedAt = 0;
 
 /* ── API ───────────────────────────────────────────────── */
 async function fetchState() {
   state = await (await fetch('/api/state')).json();
+  stateFetchedAt = Date.now();
   render();
 }
 async function doMove(m) {
@@ -268,11 +294,46 @@ function getValidDestinations() {
 /* ── Render ────────────────────────────────────────────── */
 function render() {
   if (!state) return;
+  renderClocks();
   renderScore();
   renderTurn();
   renderBoard();
   renderHistory();
   if (state.game_over) showGameOver();
+}
+
+function getClockMs(player) {
+  const key = String(player);
+  let ms = state.time_left_ms?.[key] ?? 0;
+  if (!state.game_over && state.current_player === player) {
+    ms -= (Date.now() - stateFetchedAt);
+  }
+  return Math.max(0, ms);
+}
+
+function formatClock(ms) {
+  if (ms <= 0) return '00:00';
+  const total = Math.ceil(ms / 1000);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function renderClocks() {
+  const el = document.getElementById('clock-bar');
+  const bMs = getClockMs(BLACK);
+  const wMs = getClockMs(WHITE);
+  const bActive = !state.game_over && state.current_player === BLACK;
+  const wActive = !state.game_over && state.current_player === WHITE;
+  el.innerHTML = `
+    <div class="clock-box ${bActive ? 'active' : ''}">
+      <span class="clock-player">● BLACK</span>
+      <span class="clock-time">${formatClock(bMs)}</span>
+    </div>
+    <div class="clock-box ${wActive ? 'active' : ''}">
+      <span class="clock-player">○ WHITE</span>
+      <span class="clock-time">${formatClock(wMs)}</span>
+    </div>`;
 }
 
 function renderScore() {
@@ -458,6 +519,7 @@ function showGameOver() {
 
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
+setInterval(() => { if (state) renderClocks(); }, 250);
 </script>
 </body>
 </html>
