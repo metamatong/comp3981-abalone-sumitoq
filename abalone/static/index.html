@@ -69,6 +69,29 @@ h1{
 #turn-indicator.black-turn{background:#1e2a36;color:#ccc}
 #turn-indicator.white-turn{background:#2a3040;color:#eee}
 
+/* ── End Banner ────────────────────────────────────────── */
+#end-banner{
+  display:none;
+  margin:8px 0 8px;
+  padding:10px 16px;
+  border-radius:8px;
+  font-size:14px;
+  font-weight:700;
+  letter-spacing:.2px;
+  text-align:center;
+}
+#end-banner.show{display:block}
+#end-banner.score{
+  background:#274031;
+  border:1px solid #4e8d69;
+  color:#e9fff0;
+}
+#end-banner.timeout{
+  background:#4d1f2a;
+  border:1px solid #c95b72;
+  color:#ffe9ee;
+}
+
 /* ── SVG ───────────────────────────────────────────────── */
 svg#board{cursor:default;display:block}
 
@@ -114,10 +137,14 @@ button:disabled{opacity:.4;cursor:default}
 }
 #game-over.show{display:flex}
 #game-over-box{
-  background:#141e2b;padding:36px 48px;border-radius:14px;
-  text-align:center;border:2px solid #3d6b99;
+  min-width:380px;
+  background:linear-gradient(180deg,#182739,#121d2c);
+  padding:40px 52px;border-radius:14px;
+  text-align:center;border:3px solid #5da4d1;
+  box-shadow:0 22px 52px rgba(0,0,0,.55);
 }
-#game-over-box h2{font-size:28px;margin-bottom:10px}
+#game-over-box h2{font-size:34px;margin-bottom:8px}
+#go-reason{margin-bottom:10px;color:#c5d8e3;font-size:15px}
 #game-over-box p{margin-bottom:16px;color:#99a}
 
 /* ── Help ──────────────────────────────────────────────── */
@@ -133,6 +160,7 @@ button:disabled{opacity:.4;cursor:default}
     <div id="clock-bar"></div>
     <div id="score-bar"></div>
     <div id="turn-indicator"></div>
+    <div id="end-banner"></div>
     <svg id="board" width="640" height="540"></svg>
     <div class="btn-row">
       <button class="primary" onclick="doUndo()">Undo</button>
@@ -159,6 +187,7 @@ button:disabled{opacity:.4;cursor:default}
 <div id="game-over">
   <div id="game-over-box">
     <h2 id="go-title"></h2>
+    <p id="go-reason"></p>
     <p id="go-sub"></p>
     <button class="primary" onclick="doReset()">Play Again</button>
   </div>
@@ -199,26 +228,33 @@ function parsePos(s) { return [ROWS.indexOf(s[0]), parseInt(s[1])]; }
 let state    = null;
 let selected = [];
 let stateFetchedAt = 0;
+let fetchInFlight = false;
 
 /* ── API ───────────────────────────────────────────────── */
-async function fetchState() {
-  state = await (await fetch('/api/state')).json();
-  stateFetchedAt = Date.now();
-  render();
+async function fetchState(force = false) {
+  if (fetchInFlight && !force) return;
+  fetchInFlight = true;
+  try {
+    state = await (await fetch('/api/state')).json();
+    stateFetchedAt = Date.now();
+    render();
+  } finally {
+    fetchInFlight = false;
+  }
 }
 async function doMove(m) {
   const d = await (await fetch('/api/move', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(m),
   })).json();
-  if (d.error) return;
+  if (d.error) { await fetchState(true); return; }
   selected = [];
-  await fetchState();
+  await fetchState(true);
 }
-async function doUndo()  { await fetch('/api/undo',{method:'POST'});  selected=[]; await fetchState(); }
+async function doUndo()  { await fetch('/api/undo',{method:'POST'});  selected=[]; await fetchState(true); }
 async function doReset() {
   document.getElementById('game-over').classList.remove('show');
-  await fetch('/api/reset',{method:'POST'}); selected=[]; await fetchState();
+  await fetch('/api/reset',{method:'POST'}); selected=[]; await fetchState(true);
 }
 
 /* ── Selection ─────────────────────────────────────────── */
@@ -297,9 +333,35 @@ function render() {
   renderClocks();
   renderScore();
   renderTurn();
+  renderEndBanner();
   renderBoard();
   renderHistory();
   if (state.game_over) showGameOver();
+}
+
+function winnerPlayer() {
+  if (state.winner === BLACK || state.winner === WHITE) return state.winner;
+  return state.score['1'] >= 6 ? BLACK : WHITE;
+}
+
+function gameOverText() {
+  const winner = winnerPlayer();
+  const winnerName = winner === BLACK ? 'Black' : 'White';
+  const loserName = winner === BLACK ? 'White' : 'Black';
+  if (state.game_over_reason === 'timeout') {
+    return {
+      title: `${winnerName} Wins on Time!`,
+      reason: `${loserName} ran out of time (00:00).`,
+      banner: `${winnerName} wins: ${loserName}'s clock reached 00:00.`,
+      cls: 'timeout',
+    };
+  }
+  return {
+    title: `${winnerName} Wins!`,
+    reason: `${winnerName} pushed 6 marbles off the board.`,
+    banner: `${winnerName} wins by capture.`,
+    cls: 'score',
+  };
 }
 
 function getClockMs(player) {
@@ -353,11 +415,28 @@ function renderScore() {
 
 function renderTurn() {
   const el = document.getElementById('turn-indicator');
+  if (state.game_over) {
+    el.className = '';
+    el.textContent = 'Game Over';
+    return;
+  }
   const b = state.current_player === BLACK;
   el.className = b ? 'black-turn' : 'white-turn';
   el.textContent = b
     ? `● Black's turn  (${state.marble_counts['1']} marbles)`
     : `○ White's turn  (${state.marble_counts['2']} marbles)`;
+}
+
+function renderEndBanner() {
+  const el = document.getElementById('end-banner');
+  if (!state.game_over) {
+    el.className = '';
+    el.textContent = '';
+    return;
+  }
+  const msg = gameOverText();
+  el.className = `show ${msg.cls}`;
+  el.textContent = msg.banner;
 }
 
 /* ── Board SVG ─────────────────────────────────────────── */
@@ -510,16 +589,17 @@ function renderHistory() {
 
 /* ── Game over ─────────────────────────────────────────── */
 function showGameOver() {
-  document.getElementById('go-title').textContent =
-    (state.score['1']>=6?'Black':'White') + ' Wins!';
-  document.getElementById('go-sub').textContent =
-    `Score: ${state.score['1']} – ${state.score['2']}`;
+  const msg = gameOverText();
+  document.getElementById('go-title').textContent = msg.title;
+  document.getElementById('go-reason').textContent = msg.reason;
+  document.getElementById('go-sub').textContent = `Score: ${state.score['1']} – ${state.score['2']}`;
   document.getElementById('game-over').classList.add('show');
 }
 
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
 setInterval(() => { if (state) renderClocks(); }, 250);
+setInterval(() => { fetchState(); }, 1000);
 </script>
 </body>
 </html>

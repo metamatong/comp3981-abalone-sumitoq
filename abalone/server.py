@@ -26,17 +26,55 @@ def _now_ms():
     return int(time.time() * 1000)
 
 
+def _game_status():
+    """Return terminal status including winner and end reason."""
+    if board.score[BLACK] >= 6:
+        return {
+            'game_over': True,
+            'winner': BLACK,
+            'game_over_reason': 'score',
+            'timeout_player': None,
+        }
+    if board.score[WHITE] >= 6:
+        return {
+            'game_over': True,
+            'winner': WHITE,
+            'game_over_reason': 'score',
+            'timeout_player': None,
+        }
+    if time_left_ms[BLACK] <= 0:
+        return {
+            'game_over': True,
+            'winner': WHITE,
+            'game_over_reason': 'timeout',
+            'timeout_player': BLACK,
+        }
+    if time_left_ms[WHITE] <= 0:
+        return {
+            'game_over': True,
+            'winner': BLACK,
+            'game_over_reason': 'timeout',
+            'timeout_player': WHITE,
+        }
+    return {
+        'game_over': False,
+        'winner': None,
+        'game_over_reason': None,
+        'timeout_player': None,
+    }
+
+
 def _tick_clock():
     """Deduct elapsed wall-clock time from the current player's timer."""
     global last_clock_update_ms
     now = _now_ms()
-    elapsed = max(0, now - last_clock_update_ms)
 
-    # Stop decrementing clocks after score-based game end.
-    if board.score[BLACK] >= 6 or board.score[WHITE] >= 6:
+    # Stop decrementing clocks once the game is already over.
+    if _game_status()['game_over']:
         last_clock_update_ms = now
         return
 
+    elapsed = max(0, now - last_clock_update_ms)
     if elapsed > 0:
         time_left_ms[current_player] = max(0, time_left_ms[current_player] - elapsed)
     last_clock_update_ms = now
@@ -45,6 +83,7 @@ def _tick_clock():
 def _state_json():
     """Serialize current game state to a JSON-friendly dict."""
     _tick_clock()
+    status = _game_status()
 
     cells = {}
     for pos, val in board.cells.items():
@@ -74,7 +113,10 @@ def _state_json():
         'cells': cells,
         'current_player': current_player,
         'score': board.score,
-        'game_over': board.score[BLACK] >= 6 or board.score[WHITE] >= 6,
+        'game_over': status['game_over'],
+        'winner': status['winner'],
+        'game_over_reason': status['game_over_reason'],
+        'timeout_player': status['timeout_player'],
         'legal_moves': legal_list,
         'history': history,
         'marble_counts': {
@@ -92,6 +134,8 @@ def _state_json():
 def _apply_move(data):
     global current_player, last_clock_update_ms
     _tick_clock()
+    if _game_status()['game_over']:
+        return {'error': 'Game is over'}
 
     marbles = tuple(str_to_pos(s) for s in data['marbles'])
     direction = tuple(data['direction'])
