@@ -204,6 +204,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/' or self.path == '/index.html':
             self._serve_file('index.html', 'text/html')
+        elif self.path == '/style.css':
+            self._serve_file('style.css', 'text/css')
+        elif self.path == '/script.js':
+            self._serve_file('script.js', 'application/javascript')
         elif self.path == '/api/state':
             self._json_response(_state_json())
         else:

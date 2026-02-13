@@ -1,0 +1,456 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box
+}
+
+body {
+  background: #0f1923;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh;
+  padding: 8px 20px;
+}
+
+/* ── Top bar ─────────────────────────────────────────────── */
+#top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -8px -20px 14px -20px;
+  padding: 12px 20px;
+  background: #141e2b;
+}
+
+#top-bar h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #e8e8e8;
+  line-height: 1;
+}
+
+#top-bar .subtitle {
+  font-size: 11px;
+  color: #5a7890;
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+
+/* ── Main grid ───────────────────────────────────────────── */
+#app {
+  display: grid;
+  grid-template-columns: 310px 1fr 310px;
+  grid-template-rows: auto auto;
+  gap: 16px;
+  max-width: 1540px;
+  margin: 0 auto;
+  align-items: start;
+}
+
+#left-col {
+  grid-column: 1;
+  grid-row: 1/3;
+  display: flex;
+  flex-direction: column;
+  gap: 14px
+}
+
+#board-panel {
+  grid-column: 2;
+  grid-row: 1/3;
+  display: flex;
+  justify-content: center;
+  align-items: center
+}
+
+#right-col {
+  grid-column: 3;
+  grid-row: 1/3;
+  display: flex;
+  flex-direction: column;
+  gap: 14px
+}
+
+/* ── Cards ───────────────────────────────────────────────── */
+.card {
+  background: #141e2b;
+  border-radius: 10px;
+  padding: 16px;
+  border: 1px solid #1e2d3d;
+  transition: all .3s ease;
+}
+
+/* ── Player cards ────────────────────────────────────────── */
+.player-card {
+  position: relative
+}
+
+.player-card .player-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.player-card .marble-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.marble-icon.black {
+  background: radial-gradient(circle at 35% 35%, #555, #111);
+  border: 1px solid #333
+}
+
+.marble-icon.white {
+  background: radial-gradient(circle at 35% 35%, #fff, #aaa);
+  border: 1px solid #888
+}
+
+.player-card .player-info {
+  flex: 1
+}
+
+.player-card .player-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #dce7ef
+}
+
+.player-card .player-color {
+  font-size: 11px;
+  color: #5a7890;
+  letter-spacing: .5px
+}
+
+.player-card .player-timer {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: 'SF Mono', Consolas, monospace;
+  color: #8ea7ba;
+}
+
+.player-card.active .player-timer {
+  color: #4fc3f7
+}
+
+.player-card.active {
+  border-color: #4fc3f7;
+  box-shadow: 0 0 12px rgba(79, 195, 247, .15);
+}
+
+.player-card .score-section {
+  text-align: center;
+  padding: 10px 0;
+}
+
+.player-card .score-label {
+  font-size: 11px;
+  color: #5a7890;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.player-card .score-value {
+  font-size: 38px;
+  font-weight: 700;
+  color: #dce7ef;
+}
+
+.your-turn-btn {
+  display: none;
+  width: 100%;
+  padding: 10px;
+  margin-top: 10px;
+  background: #1e2d3d;
+  border: 1px solid #2a4050;
+  border-radius: 8px;
+  color: #dce7ef;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  cursor: default;
+  letter-spacing: .5px;
+}
+
+.player-card.active .your-turn-btn {
+  display: block
+}
+
+/* ── Game controls ───────────────────────────────────────── */
+.controls-card h3 {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dce7ef;
+  margin-bottom: 12px;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ctrl-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #1e2d3d;
+  border: 1px solid #2a4050;
+  color: #8ea7ba;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.ctrl-btn:hover {
+  background: #253545;
+  color: #dce7ef
+}
+
+.ctrl-btn .icon {
+  font-size: 14px;
+  width: 18px;
+  text-align: center
+}
+
+.ctrl-btn.active-pause {
+  border-color: #4fc3f7;
+  color: #4fc3f7
+}
+
+/* ── How to play ─────────────────────────────────────────── */
+.how-card h3 {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dce7ef;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.how-card h3 .icon {
+  font-size: 15px;
+  color: #5a7890
+}
+
+.how-list {
+  list-style: disc;
+  padding-left: 18px;
+  font-size: 11px;
+  color: #8ea7ba;
+  line-height: 1.7;
+}
+
+.how-list li {
+  margin-bottom: 2px;
+}
+
+/* ── Move history ────────────────────────────────────────── */
+.history-card h3 {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dce7ef;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-card .move-count {
+  font-size: 11px;
+  color: #5a7890;
+  font-weight: 400;
+}
+
+#history-list {
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: 'SF Mono', Consolas, monospace;
+}
+
+#history-list::-webkit-scrollbar {
+  width: 4px
+}
+
+#history-list::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px
+}
+
+.history-entry {
+  padding: 3px 0;
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #1a2535;
+}
+
+.history-num {
+  color: #445;
+  min-width: 22px;
+  text-align: right
+}
+
+.history-player {
+  min-width: 12px
+}
+
+.history-move {
+  color: #7aa
+}
+
+.history-push {
+  color: #e87;
+  font-weight: 600
+}
+
+.history-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.history-placeholder .h-line {
+  height: 8px;
+  border-radius: 4px;
+  background: #1e2d3d;
+}
+
+.history-placeholder .h-line:nth-child(1) {
+  width: 100%
+}
+
+.history-placeholder .h-line:nth-child(2) {
+  width: 75%
+}
+
+.history-placeholder .h-line:nth-child(3) {
+  width: 90%
+}
+
+/* ── SVG ─────────────────────────────────────────────────── */
+svg#board {
+  cursor: default;
+  display: block
+}
+
+/* ── End Banner ──────────────────────────────────────────── */
+#end-banner {
+  display: none;
+  margin: 8px auto;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  text-align: center;
+  max-width: 400px;
+}
+
+#end-banner.show {
+  display: block
+}
+
+#end-banner.score {
+  background: #274031;
+  border: 1px solid #4e8d69;
+  color: #e9fff0;
+}
+
+#end-banner.timeout {
+  background: #4d1f2a;
+  border: 1px solid #c95b72;
+  color: #ffe9ee;
+}
+
+/* ── Game over modal ─────────────────────────────────────── */
+#game-over {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .75);
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+}
+
+#game-over.show {
+  display: flex
+}
+
+#game-over-box {
+  min-width: 380px;
+  background: linear-gradient(180deg, #182739, #121d2c);
+  padding: 40px 52px;
+  border-radius: 14px;
+  text-align: center;
+  border: 3px solid #5da4d1;
+  box-shadow: 0 22px 52px rgba(0, 0, 0, .55);
+}
+
+#game-over-box h2 {
+  font-size: 34px;
+  margin-bottom: 8px
+}
+
+#go-reason {
+  margin-bottom: 10px;
+  color: #c5d8e3;
+  font-size: 15px
+}
+
+#game-over-box p {
+  margin-bottom: 16px;
+  color: #99a
+}
+
+#game-over-box button {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 600;
+  background: #3d6b99;
+  color: #fff;
+  transition: background .15s;
+}
+
+#game-over-box button:hover {
+  background: #4d80b5
+}
+
+/* ── Pause overlay ───────────────────────────────────────── */
+#pause-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 25, 35, .7);
+  border-radius: 10px;
+  justify-content: center;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: #4fc3f7;
+  letter-spacing: 1px;
+  z-index: 2;
+}
+
+#pause-overlay.show {
+  display: flex
+}
+
+#board-wrapper {
+  position: relative;
+  display: inline-block
+}

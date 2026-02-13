@@ -23,7 +23,9 @@ abalone/
   server.py             # HTTP server + JSON API (global game state)
   main.py               # CLI/state-space entry point
   static/
-    index.html          # Web UI — single-file SPA (HTML + CSS + JS, SVG board)
+    index.html          # Web UI — HTML structure and layout
+    style.css           # Web UI — all CSS styles
+    script.js           # Web UI — all JS logic (state, rendering, API calls)
 ```
 
 ## Architecture
@@ -31,7 +33,7 @@ abalone/
 All game logic lives in Python. The browser is a stateless display layer — it fetches JSON state from the server and sends user actions as API calls.
 
 ```
-Browser (index.html)           Python (abalone/)
+Browser (static/)              Python (abalone/)
   SVG board render  <── GET /api/state ──  board.py + state_space.py
   click to move     ── POST /api/move ──>  server.py  (global state)
   undo / reset      ── POST /api/undo|reset ──>
@@ -59,7 +61,7 @@ Browser (index.html)           Python (abalone/)
 
 - **Add a new API endpoint**: edit `server.py` — add route in `do_GET`/`do_POST`, implement handler function.
 - **Change game rules**: edit `board.py` — validation in `is_legal_move()`, execution in `apply_move()`.
-- **Modify UI**: edit `abalone/static/index.html` — styles in `<style>`, logic in `<script>`, layout in `<body>`.
+- **Modify UI**: edit files in `abalone/static/` — styles in `style.css`, logic in `script.js`, layout in `index.html`.
 - **Change move generation**: edit `state_space.py` — `generate_legal_moves()` for deduplication/validation.
 
 ## Testing

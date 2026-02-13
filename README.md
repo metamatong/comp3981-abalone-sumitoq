@@ -142,7 +142,9 @@ abalone/
   server.py        # HTTP server + JSON API
   main.py          # CLI entry point
   static/
-    index.html     # Web UI (SVG hex board, JS interaction)
+    index.html     # Web UI — HTML structure and layout
+    style.css      # Web UI — all CSS styles
+    script.js      # Web UI — all JS logic (state, rendering, API calls)
 run.py             # Runner: web / cli / state
 ```
 
