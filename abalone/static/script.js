@@ -1,6 +1,8 @@
 const BLACK = 1, WHITE = 2, EMPTY = 0;
 const ROWS = 'abcdefghi';
 const DIRECTIONS = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, -1]];
+const CONTROLLER_HUMAN = 'human';
+const CONTROLLER_AI = 'ai';
 
 /* Build set of valid positions */
 const VALID = [];
@@ -26,12 +28,20 @@ function hexPx(r, c) {
 
 function posKey(r, c) { return ROWS[r] + c; }
 function parsePos(s) { return [ROWS.indexOf(s[0]), parseInt(s[1])]; }
+function getController(player) {
+    return state?.controllers?.[String(player)] || CONTROLLER_HUMAN;
+}
+function controllerLabel(player) {
+    return getController(player) === CONTROLLER_AI ? 'AI' : 'Human';
+}
 
 /* ── State ─────────────────────────────────────────────── */
 let state = null;
 let selected = [];
 let stateFetchedAt = 0;
 let fetchInFlight = false;
+let agentMoveInFlight = false;
+let modeSelected = false;
 
 /* ── API ───────────────────────────────────────────────── */
 async function fetchState(force = false) {
@@ -41,6 +51,7 @@ async function fetchState(force = false) {
         state = await (await fetch('/api/state')).json();
         stateFetchedAt = Date.now();
         render();
+        maybeAutoAgentTurn();
     } finally {
         fetchInFlight = false;
     }
@@ -63,6 +74,58 @@ async function doPause() {
     await fetch('/api/pause', { method: 'POST' });
     await fetchState(true);
 }
+async function doAgentMove(force = false) {
+    if (!state || agentMoveInFlight) return;
+    if (!force) {
+        if (state.game_over || state.paused) return;
+        if (state.current_controller !== CONTROLLER_AI) return;
+    }
+
+    agentMoveInFlight = true;
+    try {
+        await fetch('/api/agent-move', { method: 'POST' });
+        selected = [];
+        await fetchState(true);
+    } finally {
+        agentMoveInFlight = false;
+    }
+}
+function maybeAutoAgentTurn() {
+    if (!modeSelected) return;
+    if (!state) return;
+    if (state.game_over || state.paused) return;
+    if (state.current_controller !== CONTROLLER_AI) return;
+    doAgentMove();
+}
+function isModeModalOpen() {
+    return document.getElementById('mode-modal').classList.contains('show');
+}
+function openModeModal() {
+    modeSelected = false;
+    document.getElementById('mode-modal').classList.add('show');
+}
+function closeModeModal() {
+    document.getElementById('mode-modal').classList.remove('show');
+}
+async function selectMode(mode) {
+    const payload = {
+        mode: mode,
+        ai_depth: Number(state?.ai_depth || 2),
+    };
+    if (mode === 'hva') payload.human_side = 'black';
+
+    await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    await fetch('/api/reset', { method: 'POST' });
+    selected = [];
+    document.getElementById('game-over').classList.remove('show');
+    modeSelected = true;
+    closeModeModal();
+    await fetchState(true);
+}
 function doResign() {
     /* Resign = new game for now */
     doReset();
@@ -70,8 +133,10 @@ function doResign() {
 
 /* ── Selection ─────────────────────────────────────────── */
 function toggleSelect(ps) {
+    if (!modeSelected || isModeModalOpen()) return;
     if (state.game_over) return;
     if (state.paused) return;
+    if (state.current_controller !== CONTROLLER_HUMAN) return;
     const val = state.cells[ps];
 
     /* Clicked opponent or empty → try as destination */
@@ -144,7 +209,9 @@ function render() {
     if (!state) return;
     renderClocks();
     renderScore();
+    renderControllers();
     renderTurn();
+    renderAgentControls();
     renderEndBanner();
     renderPause();
     renderBoard();
@@ -202,6 +269,22 @@ function renderClocks() {
 function renderScore() {
     document.getElementById('p1-score').textContent = state.score['2'];
     document.getElementById('p2-score').textContent = state.score['1'];
+}
+
+function renderControllers() {
+    document.getElementById('p1-controller').textContent = controllerLabel(WHITE);
+    document.getElementById('p2-controller').textContent = controllerLabel(BLACK);
+}
+
+function renderAgentControls() {
+    const btn = document.getElementById('agent-move-btn');
+    const canStep = (
+        !state.game_over
+        && !state.paused
+        && state.current_controller === CONTROLLER_AI
+    );
+    btn.style.opacity = canStep ? '1' : '0.45';
+    btn.style.pointerEvents = canStep ? 'auto' : 'none';
 }
 
 function renderTurn() {
@@ -388,9 +471,11 @@ function renderHistory() {
         const e = state.history[i];
         const sym = e.player === BLACK ? '●' : '○';
         const symColor = e.player === BLACK ? '#555' : '#eee';
+        const src = e.source === CONTROLLER_AI ? 'AI' : 'H';
         h += `<div class="history-entry">
       <span class="history-num">${i + 1}.</span>
       <span class="history-player" style="color:${symColor}">${sym}</span>
+      <span class="history-source">${src}</span>
       <span class="history-move">${e.notation}</span>
       ${e.pushoff ? '<span class="history-push">pushed off!</span>' : ''}
     </div>`;
@@ -410,5 +495,7 @@ function showGameOver() {
 
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
+openModeModal();
 setInterval(() => { if (state) renderClocks(); }, 250);
 setInterval(() => { fetchState(); }, 1000);
+setInterval(() => { maybeAutoAgentTurn(); }, 300);

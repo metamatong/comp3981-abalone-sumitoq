@@ -11,8 +11,17 @@ python run.py
 # Terminal UI
 python run.py cli
 
+# Terminal with AI vs AI
+python run.py cli --mode ava --depth 2
+
+# Terminal with Human vs AI (human as white)
+python run.py cli --mode hva --human-side white --depth 2
+
 # State-space analysis
 python run.py state
+
+# State-space: root + exactly one depth-1 child (selected by legal move index)
+python run.py state --state-depth-one --state-player black --state-child-index 0
 ```
 
 No external dependencies — runs on Python 3.8+ standard library only.
@@ -31,10 +40,12 @@ Abalone is a two-player strategy game on a hexagonal board. Each player has 14 m
 
 ### Web UI Controls
 
-1. Click 1–3 of your marbles to select them (blue glow).
-2. Valid destinations light up as blue dots.
-3. Click a destination to execute the move.
-4. **Undo** / **Clear** / **New Game** buttons below the board.
+1. On launch, choose mode from the modal (`Human vs Human`, `Human (Black) vs AI`, `AI vs AI`).
+2. Click 1–3 of your marbles to select them (blue glow).
+3. Valid destinations light up as blue dots.
+4. Click a destination to execute the move.
+5. Use **AI Move** to manually trigger one AI turn, or let AI turns auto-play in AI-controlled turns.
+6. Use **Change Mode** to reopen the mode modal.
 
 ## Coordinate System
 
@@ -68,24 +79,26 @@ Abalone is a two-player strategy game on a hexagonal board. Each player has 14 m
 
 ## State-Space Generator
 
-For building AI / search algorithms. Every turn has a theoretical maximum of **840 raw moves**:
+For building AI / search algorithms. This module returns only legal, deduplicated moves.
 
-```
-14 marbles × (6 single + 6×6 double + 3×6 triple) = 14 × 60 = 840
-```
+### CLI State-Space Modes
+
+- `python run.py state`
+  - Prints legal state-space summaries for both players on the initial board.
+- `python run.py state --state-depth-one --state-player black --state-child-index N`
+  - Prints exactly two nodes:
+    - root state summary for the selected root player,
+    - one depth-1 child after applying legal move index `N`.
+  - Re-run with different `N` to inspect different children.
 
 ### Usage
 
 ```python
 from abalone.board import Board, Move, BLACK, WHITE
-from abalone.state_space import generate_legal_moves, generate_raw_moves
+from abalone.state_space import generate_legal_moves
 
 board = Board()
 board.setup_standard()
-
-# All 840 raw moves (no legality, includes duplicates)
-raw = generate_raw_moves(board, BLACK)
-len(raw)  # 840
 
 # All legal moves for current position (deduplicated, validated)
 legal = generate_legal_moves(board, BLACK)
@@ -124,11 +137,12 @@ board = snapshot  # restore
 
 ```
 Browser (HTML/JS)              Python (abalone/)
-  render board    ◄── JSON ──  board.py      Board, Move, validation, apply
-  click events    ── POST ──►  server.py     HTTP API, game state
-                               state_space.py  move generation (raw + legal)
-                               game.py       CLI game loop
-                               main.py       entry point
+  render board    ◄── JSON ──  game/board.py    Board, Move, validation, apply
+  click events    ── POST ──►  game/server.py   HTTP API, session + mode config
+                               state_space.py   legal move generation
+                               game/cli.py      CLI game loop
+                               game/main.py     CLI entry point
+                               players/*        minimax bot + heuristics + validator
 ```
 
 All game logic runs in Python. The browser is a pure display layer — it renders the JSON state and sends clicks back as API calls.
@@ -136,11 +150,23 @@ All game logic runs in Python. The browser is a pure display layer — it render
 ```
 abalone/
   __init__.py
-  board.py         # Board, Move, positions, validation, apply, display
-  state_space.py   # generate_raw_moves(), generate_legal_moves()
-  game.py          # CLI game loop with text UI
-  server.py        # HTTP server + JSON API
-  main.py          # CLI entry point
+  board.py         # compatibility shim -> game/board.py
+  game/
+    board.py       # Board, Move, positions, validation, apply, display
+    cli.py         # CLI game loop with text UI and AI turns
+    main.py        # CLI entry point
+    server.py      # HTTP server + JSON API
+    session.py     # shared runtime state for CLI/web
+    config.py      # mode/controller configuration
+  players/
+    agent.py       # choose_move(...) public interface
+    minimax.py     # minimax + alpha-beta search
+    heuristics.py  # pluggable board evaluation
+    validator.py   # shared move payload + legality validation
+    types.py       # AgentConfig
+  state_space.py   # generate_legal_moves()
+  server.py        # compatibility shim -> game/server.py
+  main.py          # compatibility shim -> game/main.py
   static/
     index.html     # Web UI — HTML structure and layout
     style.css      # Web UI — all CSS styles
@@ -154,5 +180,8 @@ run.py             # Runner: web / cli / state
 |--------|------|-------------|
 | GET | `/api/state` | Current board, score, legal moves, history |
 | POST | `/api/move` | Apply a move `{marbles: ["e5"], direction: [0,1]}` |
+| POST | `/api/agent-move` | Apply one AI move for the current AI-controlled turn |
+| POST | `/api/config` | Set mode/config `{mode, human_side, ai_depth}` |
 | POST | `/api/undo` | Undo last move |
 | POST | `/api/reset` | New game |
+| POST | `/api/pause` | Toggle pause/resume |

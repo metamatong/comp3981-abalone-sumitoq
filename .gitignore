@@ -1,2 +1,7 @@
 .idea
-__pycache__
+__pycache__/
+*.py[cod]
+abalone/__pycache__/__init__.cpython-313.pyc
+abalone/__pycache__/board.cpython-313.pyc
+abalone/__pycache__/state_space.cpython-313.pyc
+abalone/__pycache__/server.cpython-313.pyc

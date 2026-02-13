@@ -126,6 +126,14 @@ body {
   letter-spacing: .5px
 }
 
+.player-card .player-role {
+  margin-top: 2px;
+  font-size: 10px;
+  color: #8ea7ba;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+
 .player-card .player-timer {
   font-size: 18px;
   font-weight: 700;
@@ -304,6 +312,12 @@ body {
   min-width: 12px
 }
 
+.history-source {
+  min-width: 16px;
+  color: #9cb7ca;
+  font-weight: 700;
+}
+
 .history-move {
   color: #7aa
 }
@@ -428,6 +442,67 @@ svg#board {
 
 #game-over-box button:hover {
   background: #4d80b5
+}
+
+/* ── Mode modal ─────────────────────────────────────────── */
+#mode-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .72);
+  justify-content: center;
+  align-items: center;
+  z-index: 12;
+}
+
+#mode-modal.show {
+  display: flex
+}
+
+#mode-modal-box {
+  width: min(420px, calc(100vw - 24px));
+  background: linear-gradient(180deg, #182739, #121d2c);
+  padding: 32px 34px;
+  border-radius: 14px;
+  text-align: center;
+  border: 2px solid #5da4d1;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .55);
+}
+
+#mode-modal-box h2 {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+#mode-modal-box p {
+  margin-bottom: 16px;
+  color: #c5d8e3;
+  font-size: 14px;
+}
+
+.mode-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mode-option-btn {
+  width: 100%;
+  border: 1px solid #2a4050;
+  background: #1e2d3d;
+  color: #dce7ef;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.mode-option-btn:hover {
+  border-color: #4fc3f7;
+  color: #ffffff;
+  background: #253545;
 }
 
 /* ── Pause overlay ───────────────────────────────────────── */

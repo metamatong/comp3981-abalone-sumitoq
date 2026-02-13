@@ -28,6 +28,7 @@
           <div class="player-info">
             <div class="player-name">Player 1</div>
             <div class="player-color">White</div>
+            <div class="player-role" id="p1-controller">Human</div>
           </div>
           <div class="player-timer" id="p1-timer">00:00</div>
         </div>
@@ -53,6 +54,12 @@
           </div>
           <div class="ctrl-btn" onclick="doUndo()">
             <span class="icon">↩</span> Undo
+          </div>
+          <div class="ctrl-btn" id="agent-move-btn" onclick="doAgentMove(true)">
+            <span class="icon">♟</span> AI Move
+          </div>
+          <div class="ctrl-btn" onclick="openModeModal()">
+            <span class="icon">⚙</span> Change Mode
           </div>
         </div>
       </div>
@@ -87,6 +94,7 @@
           <div class="player-info">
             <div class="player-name">Player 2</div>
             <div class="player-color">Black</div>
+            <div class="player-role" id="p2-controller">Human</div>
           </div>
           <div class="player-timer" id="p2-timer">00:00</div>
         </div>
@@ -111,6 +119,18 @@
       <p id="go-reason"></p>
       <p id="go-sub"></p>
       <button onclick="doReset()">Play Again</button>
+    </div>
+  </div>
+
+  <div id="mode-modal">
+    <div id="mode-modal-box">
+      <h2>Choose Game Mode</h2>
+      <p>Select how this match should be played.</p>
+      <div class="mode-options">
+        <button class="mode-option-btn" onclick="selectMode('hvh')">Human vs Human</button>
+        <button class="mode-option-btn" onclick="selectMode('hva')">Human (Black) vs AI</button>
+        <button class="mode-option-btn" onclick="selectMode('ava')">AI vs AI</button>
+      </div>
     </div>
   </div>
 
