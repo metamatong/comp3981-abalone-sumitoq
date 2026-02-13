@@ -20,6 +20,7 @@ move_history = []          # list of {move, result, snapshot, player}
 INITIAL_TIME_MS = 30 * 60 * 1000
 time_left_ms = {BLACK: INITIAL_TIME_MS, WHITE: INITIAL_TIME_MS}
 last_clock_update_ms = int(time.time() * 1000)
+paused = False
 
 
 def _now_ms():
@@ -70,7 +71,7 @@ def _tick_clock():
     now = _now_ms()
 
     # Stop decrementing clocks once the game is already over.
-    if _game_status()['game_over']:
+    if _game_status()['game_over'] or paused:
         last_clock_update_ms = now
         return
 
@@ -127,6 +128,7 @@ def _state_json():
             BLACK: time_left_ms[BLACK],
             WHITE: time_left_ms[WHITE],
         },
+        'paused': paused,
         'initial_time_ms': INITIAL_TIME_MS,
     }
 
@@ -136,6 +138,8 @@ def _apply_move(data):
     _tick_clock()
     if _game_status()['game_over']:
         return {'error': 'Game is over'}
+    if paused:
+        return {'error': 'Game is paused'}
 
     marbles = tuple(str_to_pos(s) for s in data['marbles'])
     direction = tuple(data['direction'])
@@ -172,14 +176,23 @@ def _undo():
 
 
 def _reset():
-    global current_player, board, move_history, time_left_ms, last_clock_update_ms
+    global current_player, board, move_history, time_left_ms, last_clock_update_ms, paused
     board = Board()
     board.setup_standard()
     current_player = BLACK
     move_history = []
     time_left_ms = {BLACK: INITIAL_TIME_MS, WHITE: INITIAL_TIME_MS}
     last_clock_update_ms = _now_ms()
+    paused = False
     return {'ok': True}
+
+
+def _toggle_pause():
+    global paused, last_clock_update_ms
+    _tick_clock()
+    paused = not paused
+    last_clock_update_ms = _now_ms()
+    return {'ok': True, 'paused': paused}
 
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
@@ -206,6 +219,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(_undo())
         elif self.path == '/api/reset':
             self._json_response(_reset())
+        elif self.path == '/api/pause':
+            self._json_response(_toggle_pause())
         else:
             self.send_error(404)
 
