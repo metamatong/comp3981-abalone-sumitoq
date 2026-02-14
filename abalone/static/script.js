@@ -175,6 +175,13 @@ document.getElementById('cfg-same-time').addEventListener('change', function () 
 // Initialize P2 input state
 document.getElementById('cfg-p2-time').disabled = true;
 
+/* Sync P1 value → P2 when "same time" is checked */
+document.getElementById('cfg-p1-time').addEventListener('input', function () {
+    if (document.getElementById('cfg-same-time').checked) {
+        document.getElementById('cfg-p2-time').value = this.value;
+    }
+});
+
 /* ── Resign ────────────────────────────────────────────── */
 async function doResign() {
     if (!state || state.game_over) return;
