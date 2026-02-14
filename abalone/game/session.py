@@ -22,6 +22,8 @@ class GameSession:
         self.move_history: List[dict] = []
         self.time_left_ms = {BLACK: self.initial_time_ms, WHITE: self.initial_time_ms}
         self.last_clock_update_ms = self._now_ms()
+        self.turn_start_ms = self._now_ms()
+        self.pause_start_ms: Optional[int] = None
         self.paused = False
 
         self.board.setup_standard()
@@ -125,6 +127,9 @@ class GameSession:
         snapshot = self.board.copy()
         clock_snapshot = dict(self.time_left_ms)
 
+        now = self._now_ms()
+        duration_ms = max(0, now - self.turn_start_ms)
+
         result = self.board.apply_move(move, player)
         self.move_history.append(
             {
@@ -135,11 +140,13 @@ class GameSession:
                 "player": player,
                 "source": source,
                 "search": search,
+                "duration_ms": duration_ms,
             }
         )
 
         self.current_player = WHITE if self.current_player == BLACK else BLACK
-        self.last_clock_update_ms = self._now_ms()
+        self.last_clock_update_ms = now
+        self.turn_start_ms = now
 
         return {
             "ok": True,
@@ -193,7 +200,9 @@ class GameSession:
         self.board = entry["snapshot"]
         self.current_player = entry["player"]
         self.time_left_ms = dict(entry["clock_snapshot"])
-        self.last_clock_update_ms = self._now_ms()
+        now = self._now_ms()
+        self.last_clock_update_ms = now
+        self.turn_start_ms = now
         return {"ok": True}
 
     def reset(self) -> dict:
@@ -202,14 +211,28 @@ class GameSession:
         self.current_player = BLACK
         self.move_history = []
         self.time_left_ms = {BLACK: self.initial_time_ms, WHITE: self.initial_time_ms}
-        self.last_clock_update_ms = self._now_ms()
+        now = self._now_ms()
+        self.last_clock_update_ms = now
+        self.turn_start_ms = now
+        self.pause_start_ms = None
         self.paused = False
         return {"ok": True}
 
     def toggle_pause(self) -> dict:
         self._tick_clock()
-        self.paused = not self.paused
-        self.last_clock_update_ms = self._now_ms()
+        now = self._now_ms()
+        if not self.paused:
+            # Pausing: record when we paused
+            self.paused = True
+            self.pause_start_ms = now
+        else:
+            # Resuming: shift turn_start_ms forward so paused time isn't counted
+            self.paused = False
+            if self.pause_start_ms is not None:
+                paused_duration = now - self.pause_start_ms
+                self.turn_start_ms += paused_duration
+                self.pause_start_ms = None
+        self.last_clock_update_ms = now
         return {"ok": True, "paused": self.paused}
 
     def state_json(self) -> dict:
@@ -242,6 +265,7 @@ class GameSession:
                     "pushoff": entry["result"]["pushoff"],
                     "source": entry["source"],
                     "search": entry["search"],
+                    "duration_ms": entry.get("duration_ms", 0),
                 }
             )
 

@@ -42,6 +42,7 @@ let stateFetchedAt = 0;
 let fetchInFlight = false;
 let agentMoveInFlight = false;
 let modeSelected = false;
+let lastHistoryKey = '';
 
 /* ── API ───────────────────────────────────────────────── */
 async function fetchState(force = false) {
@@ -457,10 +458,26 @@ function cell(x, y, r, c, ps, val, sel, dst) {
 }
 
 /* ── History ───────────────────────────────────────────── */
+function formatDuration(ms) {
+    if (ms == null || ms <= 0) return '0.0s';
+    const totalSec = ms / 1000;
+    if (totalSec < 60) return totalSec.toFixed(1) + 's';
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
 function renderHistory() {
     const el = document.getElementById('history-list');
     const countEl = document.getElementById('move-count');
     countEl.textContent = `${state.history.length} moves`;
+
+    /* Build a key from length + last move notation to detect changes */
+    const last = state.history.length ? state.history[state.history.length - 1].notation : '';
+    const key = `${state.history.length}:${last}`;
+    if (key === lastHistoryKey) return;          /* Fix 1: skip if unchanged */
+    const prevLen = parseInt(lastHistoryKey) || 0;
+    lastHistoryKey = key;
 
     if (!state.history.length) {
         el.innerHTML = '';
@@ -472,16 +489,21 @@ function renderHistory() {
         const sym = e.player === BLACK ? '●' : '○';
         const symColor = e.player === BLACK ? '#555' : '#eee';
         const src = e.source === CONTROLLER_AI ? 'AI' : 'H';
+        const dur = formatDuration(e.duration_ms);
         h += `<div class="history-entry">
       <span class="history-num">${i + 1}.</span>
       <span class="history-player" style="color:${symColor}">${sym}</span>
       <span class="history-source">${src}</span>
       <span class="history-move">${e.notation}</span>
       ${e.pushoff ? '<span class="history-push">pushed off!</span>' : ''}
+      <span class="history-time">${dur}</span>
     </div>`;
     }
     el.innerHTML = h;
-    el.scrollTop = el.scrollHeight;
+    /* Fix 2: only auto-scroll when a new move was added */
+    if (state.history.length > prevLen) {
+        el.scrollTop = el.scrollHeight;
+    }
 }
 
 /* ── Game over ─────────────────────────────────────────── */
