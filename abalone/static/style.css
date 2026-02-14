@@ -83,7 +83,8 @@ body {
 
 /* ── Player cards ────────────────────────────────────────── */
 .player-card {
-  position: relative
+  position: relative;
+  min-height: 180px;
 }
 
 .player-card .player-header {
@@ -182,25 +183,6 @@ body {
   color: #dce7ef;
 }
 
-.your-turn-btn {
-  display: none;
-  width: 100%;
-  padding: 10px;
-  margin-top: 10px;
-  background: #1e2d3d;
-  border: 1px solid #2a4050;
-  border-radius: 8px;
-  color: #dce7ef;
-  font-size: 13px;
-  font-weight: 700;
-  text-align: center;
-  cursor: default;
-  letter-spacing: .5px;
-}
-
-.player-card.active .your-turn-btn {
-  display: block
-}
 
 /* ── Game controls ───────────────────────────────────────── */
 .controls-card h3 {
