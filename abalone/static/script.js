@@ -44,6 +44,7 @@ let agentMoveInFlight = false;
 let gameStarted = false;
 let hasPlayedGame = false;
 let wasPausedBeforeModal = false;
+let gameOverDismissed = false;
 let lastHistoryKey = '';
 
 /* ── API ───────────────────────────────────────────────── */
@@ -157,6 +158,7 @@ async function startGame() {
     document.getElementById('game-over').classList.remove('show');
     gameStarted = true;
     hasPlayedGame = true;
+    gameOverDismissed = false;
     wasPausedBeforeModal = true;  // skip resume logic — reset already unpaused
     closeGameConfigModal();
     await fetchState(true);
@@ -192,6 +194,7 @@ async function doResign() {
 /* ── Game Over ─────────────────────────────────────────── */
 function closeGameOver() {
     document.getElementById('game-over').classList.remove('show');
+    gameOverDismissed = true;
 }
 
 /* ── Selection ─────────────────────────────────────────── */
@@ -279,7 +282,7 @@ function render() {
     renderPause();
     renderBoard();
     renderHistory();
-    if (state.game_over) showGameOver();
+    if (state.game_over && !gameOverDismissed) showGameOver();
 }
 
 function winnerPlayer() {
