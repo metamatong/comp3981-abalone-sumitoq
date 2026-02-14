@@ -32,6 +32,7 @@
           </div>
           <div class="player-timer" id="p1-timer">00:00</div>
         </div>
+        <div class="move-timer" id="p1-move-timer"></div>
         <div class="score-section">
           <div class="score-label">Marbles Captured</div>
           <div class="score-value" id="p1-score">0</div>
@@ -43,7 +44,7 @@
       <div class="card controls-card">
         <h3>Game Controls</h3>
         <div class="controls-grid">
-          <div class="ctrl-btn" onclick="doReset()">
+          <div class="ctrl-btn" onclick="openGameConfigModal()">
             <span class="icon">↻</span> New Game
           </div>
           <div class="ctrl-btn" id="pause-btn" onclick="doPause()">
@@ -55,24 +56,7 @@
           <div class="ctrl-btn" onclick="doUndo()">
             <span class="icon">↩</span> Undo
           </div>
-          <div class="ctrl-btn" id="agent-move-btn" onclick="doAgentMove(true)">
-            <span class="icon">♟</span> AI Move
-          </div>
-          <div class="ctrl-btn" onclick="openModeModal()">
-            <span class="icon">⚙</span> Change Mode
-          </div>
         </div>
-      </div>
-
-      <!-- How to Play -->
-      <div class="card how-card">
-        <h3><span class="icon">ⓘ</span> How to Play:</h3>
-        <ul id="help-text" class="how-list">
-          <li>Click 1–3 of your marbles in a line to select them</li>
-          <li>Click a highlighted cell to move</li>
-          <li>Push opponent marbles when you outnumber them inline (Sumito)</li>
-          <li>Push 6 opponent marbles off the board to win</li>
-        </ul>
       </div>
     </div>
 
@@ -98,6 +82,7 @@
           </div>
           <div class="player-timer" id="p2-timer">00:00</div>
         </div>
+        <div class="move-timer" id="p2-move-timer"></div>
         <div class="score-section">
           <div class="score-label">Marbles Captured</div>
           <div class="score-value" id="p2-score">0</div>
@@ -113,8 +98,10 @@
     </div>
   </div>
 
+  <!-- Game Over Overlay -->
   <div id="game-over">
     <div id="game-over-box">
+      <button class="modal-close-btn" onclick="closeGameOver()">&times;</button>
       <h2 id="go-title"></h2>
       <p id="go-reason"></p>
       <p id="go-sub"></p>
@@ -122,14 +109,96 @@
     </div>
   </div>
 
-  <div id="mode-modal">
-    <div id="mode-modal-box">
-      <h2>Choose Game Mode</h2>
-      <p>Select how this match should be played.</p>
-      <div class="mode-options">
-        <button class="mode-option-btn" onclick="selectMode('hvh')">Human vs Human</button>
-        <button class="mode-option-btn" onclick="selectMode('hva')">Human (Black) vs AI</button>
-        <button class="mode-option-btn" onclick="selectMode('ava')">AI vs AI</button>
+  <!-- Game Config Modal (2 pages) -->
+  <div id="game-config-modal">
+    <div id="game-config-box">
+      <button class="modal-close-btn" id="config-close-btn" onclick="closeGameConfigModal()"
+        style="display:none">&times;</button>
+
+      <!-- Page 1: Game Settings -->
+      <div id="config-page-1" class="config-page">
+        <h2>Game Settings</h2>
+        <p class="config-subtitle">Configure your Abalone game</p>
+
+        <div class="config-section">
+          <label class="config-label">Board Layout</label>
+          <select id="cfg-layout" class="config-select">
+            <option value="standard">Standard</option>
+            <option value="belgian_daisy">Belgian Daisy</option>
+            <option value="german_daisy">German Daisy</option>
+          </select>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Game Mode</label>
+          <div class="config-radios">
+            <label class="config-radio">
+              <input type="radio" name="cfg-mode" value="hvh" checked>
+              <span class="radio-dot"></span> Human vs Human
+            </label>
+            <label class="config-radio">
+              <input type="radio" name="cfg-mode" value="hva">
+              <span class="radio-dot"></span> Human vs AI
+            </label>
+            <label class="config-radio">
+              <input type="radio" name="cfg-mode" value="ava">
+              <span class="radio-dot"></span> AI vs AI
+            </label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Player 1 Color</label>
+          <div class="config-radios">
+            <label class="config-radio">
+              <input type="radio" name="cfg-color" value="white">
+              <span class="radio-dot"></span>
+              <span class="marble-icon-sm white"></span> White
+            </label>
+            <label class="config-radio">
+              <input type="radio" name="cfg-color" value="black" checked>
+              <span class="radio-dot"></span>
+              <span class="marble-icon-sm black"></span> Black (goes first)
+            </label>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <label class="config-label">Total Time per Player (minutes)</label>
+          <div class="config-time-row">
+            <input type="number" id="cfg-p1-time" class="config-input" min="0" placeholder="Player1 time:" value="10">
+            <input type="number" id="cfg-p2-time" class="config-input" min="0" placeholder="Player2 time:" value="10">
+          </div>
+          <label class="config-checkbox">
+            <input type="checkbox" id="cfg-same-time" checked>
+            Use same time for both players
+          </label>
+        </div>
+
+        <div class="config-section config-row">
+          <div>
+            <label class="config-label">Max Moves per Game</label>
+            <input type="number" id="cfg-max-moves" class="config-input" min="0" value="500">
+          </div>
+          <div>
+            <label class="config-label">Time Limit per Move (seconds)</label>
+            <input type="number" id="cfg-move-limit" class="config-input" min="0" value="30">
+          </div>
+        </div>
+
+        <button class="config-primary-btn" onclick="showConfigPage(2)">Next</button>
+      </div>
+
+      <!-- Page 2: How to Play -->
+      <div id="config-page-2" class="config-page" style="display:none">
+        <h2><span class="icon">ⓘ</span> How to Play:</h2>
+        <ul class="how-list-modal">
+          <li>Click 1–3 of your marbles in a line to select them</li>
+          <li>Click a highlighted cell to move</li>
+          <li>Push opponent marbles when you outnumber them inline (Sumito)</li>
+          <li>Push 6 opponent marbles off the board to win</li>
+        </ul>
+        <button class="config-primary-btn" onclick="startGame()">Start Game</button>
       </div>
     </div>
   </div>

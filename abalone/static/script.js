@@ -41,7 +41,9 @@ let selected = [];
 let stateFetchedAt = 0;
 let fetchInFlight = false;
 let agentMoveInFlight = false;
-let modeSelected = false;
+let gameStarted = false;
+let hasPlayedGame = false;
+let wasPausedBeforeModal = false;
 let lastHistoryKey = '';
 
 /* ── API ───────────────────────────────────────────────── */
@@ -69,51 +71,81 @@ async function doMove(m) {
 async function doUndo() { await fetch('/api/undo', { method: 'POST' }); selected = []; await fetchState(true); }
 async function doReset() {
     document.getElementById('game-over').classList.remove('show');
+    closeGameConfigModal();
     await fetch('/api/reset', { method: 'POST' }); selected = []; await fetchState(true);
 }
 async function doPause() {
     await fetch('/api/pause', { method: 'POST' });
     await fetchState(true);
 }
-async function doAgentMove(force = false) {
-    if (!state || agentMoveInFlight) return;
-    if (!force) {
-        if (state.game_over || state.paused) return;
-        if (state.current_controller !== CONTROLLER_AI) return;
-    }
 
-    agentMoveInFlight = true;
-    try {
-        await fetch('/api/agent-move', { method: 'POST' });
-        selected = [];
-        await fetchState(true);
-    } finally {
-        agentMoveInFlight = false;
-    }
-}
 function maybeAutoAgentTurn() {
-    if (!modeSelected) return;
+    if (!gameStarted) return;
     if (!state) return;
     if (state.game_over || state.paused) return;
     if (state.current_controller !== CONTROLLER_AI) return;
-    doAgentMove();
+    if (agentMoveInFlight) return;
+    agentMoveInFlight = true;
+    fetch('/api/agent-move', { method: 'POST' })
+        .then(() => { selected = []; return fetchState(true); })
+        .finally(() => { agentMoveInFlight = false; });
 }
-function isModeModalOpen() {
-    return document.getElementById('mode-modal').classList.contains('show');
+
+/* ── Game Config Modal ─────────────────────────────────── */
+function isConfigModalOpen() {
+    return document.getElementById('game-config-modal').classList.contains('show');
 }
-function openModeModal() {
-    modeSelected = false;
-    document.getElementById('mode-modal').classList.add('show');
+async function openGameConfigModal() {
+    const closeBtn = document.getElementById('config-close-btn');
+    // Show × only if a game has already been played (not first visit)
+    closeBtn.style.display = hasPlayedGame ? 'block' : 'none';
+    // Auto-pause the running game
+    if (gameStarted && state && !state.paused && !state.game_over) {
+        wasPausedBeforeModal = false;
+        await fetch('/api/pause', { method: 'POST' });
+        await fetchState(true);
+    } else {
+        wasPausedBeforeModal = state?.paused || false;
+    }
+    gameStarted = false;
+    showConfigPage(1);
+    document.getElementById('game-config-modal').classList.add('show');
 }
-function closeModeModal() {
-    document.getElementById('mode-modal').classList.remove('show');
+async function closeGameConfigModal() {
+    document.getElementById('game-config-modal').classList.remove('show');
+    // Resume if we auto-paused (and user didn't manually pause before)
+    if (hasPlayedGame && !wasPausedBeforeModal && state?.paused && !state?.game_over) {
+        await fetch('/api/pause', { method: 'POST' });
+        await fetchState(true);
+    }
+    gameStarted = hasPlayedGame;
 }
-async function selectMode(mode) {
+function showConfigPage(page) {
+    document.getElementById('config-page-1').style.display = page === 1 ? 'block' : 'none';
+    document.getElementById('config-page-2').style.display = page === 2 ? 'block' : 'none';
+}
+
+async function startGame() {
+    const mode = document.querySelector('input[name="cfg-mode"]:checked').value;
+    const colorVal = document.querySelector('input[name="cfg-color"]:checked').value;
+    const human_side = colorVal === 'black' ? 'black' : 'white';
+    const board_layout = document.getElementById('cfg-layout').value;
+    const sameTime = document.getElementById('cfg-same-time').checked;
+    const p1Min = Number(document.getElementById('cfg-p1-time').value) || 0;
+    const p2Min = sameTime ? p1Min : (Number(document.getElementById('cfg-p2-time').value) || 0);
+    const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
+    const time_limit_per_move_s = Number(document.getElementById('cfg-move-limit').value) || 0;
+
     const payload = {
-        mode: mode,
+        mode,
+        human_side,
+        board_layout,
         ai_depth: Number(state?.ai_depth || 2),
+        player1_time_ms: p1Min * 60 * 1000,
+        player2_time_ms: p2Min * 60 * 1000,
+        max_moves,
+        time_limit_per_move_s,
     };
-    if (mode === 'hva') payload.human_side = 'black';
 
     await fetch('/api/config', {
         method: 'POST',
@@ -123,18 +155,41 @@ async function selectMode(mode) {
     await fetch('/api/reset', { method: 'POST' });
     selected = [];
     document.getElementById('game-over').classList.remove('show');
-    modeSelected = true;
-    closeModeModal();
+    gameStarted = true;
+    hasPlayedGame = true;
+    wasPausedBeforeModal = true;  // skip resume logic — reset already unpaused
+    closeGameConfigModal();
     await fetchState(true);
 }
-function doResign() {
-    /* Resign = new game for now */
-    doReset();
+
+/* Sync "same time" checkbox */
+document.getElementById('cfg-same-time').addEventListener('change', function () {
+    const p2Input = document.getElementById('cfg-p2-time');
+    if (this.checked) {
+        p2Input.value = document.getElementById('cfg-p1-time').value;
+        p2Input.disabled = true;
+    } else {
+        p2Input.disabled = false;
+    }
+});
+// Initialize P2 input state
+document.getElementById('cfg-p2-time').disabled = true;
+
+/* ── Resign ────────────────────────────────────────────── */
+async function doResign() {
+    if (!state || state.game_over) return;
+    await fetch('/api/resign', { method: 'POST' });
+    await fetchState(true);
+}
+
+/* ── Game Over ─────────────────────────────────────────── */
+function closeGameOver() {
+    document.getElementById('game-over').classList.remove('show');
 }
 
 /* ── Selection ─────────────────────────────────────────── */
 function toggleSelect(ps) {
-    if (!modeSelected || isModeModalOpen()) return;
+    if (!gameStarted || isConfigModalOpen()) return;
     if (state.game_over) return;
     if (state.paused) return;
     if (state.current_controller !== CONTROLLER_HUMAN) return;
@@ -209,10 +264,10 @@ function getValidDestinations() {
 function render() {
     if (!state) return;
     renderClocks();
+    renderMoveTimers();
     renderScore();
     renderControllers();
     renderTurn();
-    renderAgentControls();
     renderEndBanner();
     renderPause();
     renderBoard();
@@ -226,10 +281,43 @@ function winnerPlayer() {
 }
 
 function gameOverText() {
-    const winner = winnerPlayer();
-    const winnerName = winner === BLACK ? 'Black' : 'White';
-    const loserName = winner === BLACK ? 'White' : 'Black';
-    if (state.game_over_reason === 'timeout') {
+    const reason = state.game_over_reason;
+
+    if (reason === 'resign') {
+        const winner = winnerPlayer();
+        const winnerName = winner === BLACK ? 'Black' : 'White';
+        const loserName = winner === BLACK ? 'White' : 'Black';
+        return {
+            title: `${winnerName} Wins!`,
+            reason: `${loserName} resigned.`,
+            banner: `${winnerName} wins: ${loserName} resigned.`,
+            cls: 'resign',
+        };
+    }
+
+    if (reason === 'max_moves') {
+        if (state.winner == null) {
+            return {
+                title: 'Draw!',
+                reason: `Max moves reached. Score tied.`,
+                banner: `Draw: max moves reached with tied score.`,
+                cls: 'max_moves',
+            };
+        }
+        const winner = winnerPlayer();
+        const winnerName = winner === BLACK ? 'Black' : 'White';
+        return {
+            title: `${winnerName} Wins!`,
+            reason: `Max moves reached. ${winnerName} captured more.`,
+            banner: `${winnerName} wins: max moves reached.`,
+            cls: 'max_moves',
+        };
+    }
+
+    if (reason === 'timeout') {
+        const winner = winnerPlayer();
+        const winnerName = winner === BLACK ? 'Black' : 'White';
+        const loserName = winner === BLACK ? 'White' : 'Black';
         return {
             title: `${winnerName} Wins on Time!`,
             reason: `${loserName} ran out of time (00:00).`,
@@ -237,6 +325,10 @@ function gameOverText() {
             cls: 'timeout',
         };
     }
+
+    // Default: score
+    const winner = winnerPlayer();
+    const winnerName = winner === BLACK ? 'Black' : 'White';
     return {
         title: `${winnerName} Wins!`,
         reason: `${winnerName} pushed 6 marbles off the board.`,
@@ -248,7 +340,7 @@ function gameOverText() {
 function getClockMs(player) {
     const key = String(player);
     let ms = state.time_left_ms?.[key] ?? 0;
-    if (!state.game_over && !state.paused && state.current_player === player) {
+    if (gameStarted && !state.game_over && !state.paused && state.current_player === player) {
         ms -= (Date.now() - stateFetchedAt);
     }
     return Math.max(0, ms);
@@ -267,6 +359,44 @@ function renderClocks() {
     document.getElementById('p2-timer').textContent = formatClock(getClockMs(BLACK));
 }
 
+function getMoveTimeLeftMs() {
+    if (!state || !gameStarted || state.game_over || state.paused) return null;
+    if (!state.time_limit_per_move_s || state.time_limit_per_move_s <= 0) return null;
+    const limitMs = state.time_limit_per_move_s * 1000;
+    const elapsed = Date.now() - stateFetchedAt + (stateFetchedAt - state.turn_start_ms);
+    return Math.max(0, limitMs - elapsed);
+}
+
+function renderMoveTimers() {
+    const p1El = document.getElementById('p1-move-timer');
+    const p2El = document.getElementById('p2-move-timer');
+    const moveMs = getMoveTimeLeftMs();
+
+    if (moveMs == null) {
+        p1El.textContent = '';
+        p1El.className = 'move-timer';
+        p2El.textContent = '';
+        p2El.className = 'move-timer';
+        return;
+    }
+
+    const secs = Math.ceil(moveMs / 1000);
+    const text = `${secs}`;
+    const warn = secs <= 5;
+
+    if (state.current_player === WHITE) {
+        p1El.textContent = text;
+        p1El.className = warn ? 'move-timer warning' : 'move-timer';
+        p2El.textContent = '';
+        p2El.className = 'move-timer';
+    } else {
+        p2El.textContent = text;
+        p2El.className = warn ? 'move-timer warning' : 'move-timer';
+        p1El.textContent = '';
+        p1El.className = 'move-timer';
+    }
+}
+
 function renderScore() {
     document.getElementById('p1-score').textContent = state.score['2'];
     document.getElementById('p2-score').textContent = state.score['1'];
@@ -275,17 +405,6 @@ function renderScore() {
 function renderControllers() {
     document.getElementById('p1-controller').textContent = controllerLabel(WHITE);
     document.getElementById('p2-controller').textContent = controllerLabel(BLACK);
-}
-
-function renderAgentControls() {
-    const btn = document.getElementById('agent-move-btn');
-    const canStep = (
-        !state.game_over
-        && !state.paused
-        && state.current_controller === CONTROLLER_AI
-    );
-    btn.style.opacity = canStep ? '1' : '0.45';
-    btn.style.pointerEvents = canStep ? 'auto' : 'none';
 }
 
 function renderTurn() {
@@ -475,7 +594,7 @@ function renderHistory() {
     /* Build a key from length + last move notation to detect changes */
     const last = state.history.length ? state.history[state.history.length - 1].notation : '';
     const key = `${state.history.length}:${last}`;
-    if (key === lastHistoryKey) return;          /* Fix 1: skip if unchanged */
+    if (key === lastHistoryKey) return;
     const prevLen = parseInt(lastHistoryKey) || 0;
     lastHistoryKey = key;
 
@@ -500,7 +619,6 @@ function renderHistory() {
     </div>`;
     }
     el.innerHTML = h;
-    /* Fix 2: only auto-scroll when a new move was added */
     if (state.history.length > prevLen) {
         el.scrollTop = el.scrollHeight;
     }
@@ -517,7 +635,7 @@ function showGameOver() {
 
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
-openModeModal();
-setInterval(() => { if (state) renderClocks(); }, 250);
+openGameConfigModal();
+setInterval(() => { if (state) { renderClocks(); renderMoveTimers(); } }, 250);
 setInterval(() => { fetchState(); }, 1000);
 setInterval(() => { maybeAutoAgentTurn(); }, 300);

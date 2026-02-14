@@ -43,6 +43,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(session.reset())
         elif self.path == "/api/pause":
             self._json_response(session.toggle_pause())
+        elif self.path == "/api/resign":
+            self._json_response(session.resign())
         elif self.path == "/api/config":
             self._json_response(session.configure(body))
         else:

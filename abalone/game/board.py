@@ -150,6 +150,32 @@ STANDARD_WHITE = [
     (8, 5), (8, 6), (8, 7), (8, 8), (8, 9),
 ]
 
+BELGIAN_DAISY_BLACK = [
+    (0, 1), (0, 2), (1, 1), (1, 2), (1, 3), (2, 1), (2, 2),       # bottom-left flower
+    (6, 8), (6, 9), (7, 7), (7, 8), (7, 9), (8, 8), (8, 9),       # top-right flower
+]
+
+BELGIAN_DAISY_WHITE = [
+    (0, 4), (0, 5), (1, 4), (1, 5), (1, 6), (2, 6), (2, 7),       # bottom-right flower
+    (6, 3), (6, 4), (7, 4), (7, 5), (7, 6), (8, 5), (8, 6),       # top-left flower
+]
+
+GERMAN_DAISY_BLACK = [
+    (1, 1), (1, 2), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2),       # bottom-left flower
+    (5, 8), (5, 9), (6, 7), (6, 8), (6, 9), (7, 8), (7, 9),       # top-right flower
+]
+
+GERMAN_DAISY_WHITE = [
+    (1, 5), (1, 6), (2, 5), (2, 6), (2, 7), (3, 7), (3, 8),       # bottom-right flower
+    (5, 2), (5, 3), (6, 3), (6, 4), (6, 5), (7, 4), (7, 5),       # top-left flower
+]
+
+LAYOUTS = {
+    "standard": (STANDARD_BLACK, STANDARD_WHITE),
+    "belgian_daisy": (BELGIAN_DAISY_BLACK, BELGIAN_DAISY_WHITE),
+    "german_daisy": (GERMAN_DAISY_BLACK, GERMAN_DAISY_WHITE),
+}
+
 
 class Board:
     def __init__(self):
@@ -161,6 +187,17 @@ class Board:
         for pos in STANDARD_BLACK:
             self.cells[pos] = BLACK
         for pos in STANDARD_WHITE:
+            self.cells[pos] = WHITE
+
+    def setup_layout(self, name: str):
+        """Set up board using a named layout."""
+        if name not in LAYOUTS:
+            raise ValueError(f"Unknown layout: {name}")
+        black_positions, white_positions = LAYOUTS[name]
+        self.clear()
+        for pos in black_positions:
+            self.cells[pos] = BLACK
+        for pos in white_positions:
             self.cells[pos] = WHITE
 
     def clear(self):

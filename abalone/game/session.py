@@ -13,7 +13,7 @@ from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 
 
 class GameSession:
-    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 30 * 60 * 1000):
+    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 10 * 60 * 1000):
         self.initial_time_ms = initial_time_ms
         self.config = config or GameConfig()
 
@@ -25,6 +25,11 @@ class GameSession:
         self.turn_start_ms = self._now_ms()
         self.pause_start_ms: Optional[int] = None
         self.paused = False
+        self.started = False
+
+        # Resign state
+        self._resigned = False
+        self._resign_winner: Optional[int] = None
 
         self.board.setup_standard()
 
@@ -40,6 +45,15 @@ class GameSession:
         return int(time.time() * 1000)
 
     def _status(self) -> dict:
+        # Check resign first
+        if self._resigned:
+            return {
+                "game_over": True,
+                "winner": self._resign_winner,
+                "game_over_reason": "resign",
+                "timeout_player": None,
+            }
+
         if self.board.score[BLACK] >= 6:
             return {
                 "game_over": True,
@@ -72,6 +86,22 @@ class GameSession:
                 "timeout_player": WHITE,
             }
 
+        # Max moves check
+        if self.config.max_moves > 0 and len(self.move_history) >= self.config.max_moves:
+            # Winner is the player who captured more marbles
+            if self.board.score[BLACK] > self.board.score[WHITE]:
+                winner = BLACK
+            elif self.board.score[WHITE] > self.board.score[BLACK]:
+                winner = WHITE
+            else:
+                winner = None  # draw
+            return {
+                "game_over": True,
+                "winner": winner,
+                "game_over_reason": "max_moves",
+                "timeout_player": None,
+            }
+
         return {
             "game_over": False,
             "winner": None,
@@ -81,7 +111,7 @@ class GameSession:
 
     def _tick_clock(self):
         now = self._now_ms()
-        if self._status()["game_over"] or self.paused:
+        if not self.started or self._status()["game_over"] or self.paused:
             self.last_clock_update_ms = now
             return
 
@@ -91,8 +121,28 @@ class GameSession:
 
         self.last_clock_update_ms = now
 
+    def _check_move_time_limit(self):
+        """If per-move time limit is exceeded, auto-switch to next player."""
+        if not self.started:
+            return
+        if self.config.time_limit_per_move_s <= 0:
+            return
+        if self._status()["game_over"] or self.paused:
+            return
+
+        now = self._now_ms()
+        elapsed_ms = max(0, now - self.turn_start_ms)
+        limit_ms = self.config.time_limit_per_move_s * 1000
+
+        if elapsed_ms >= limit_ms:
+            # Auto-switch turn (skip current player's move)
+            self.current_player = WHITE if self.current_player == BLACK else BLACK
+            self.last_clock_update_ms = now
+            self.turn_start_ms = now
+
     def _before_turn_action(self) -> Optional[str]:
         self._tick_clock()
+        self._check_move_time_limit()
 
         if self._status()["game_over"]:
             return "Game is over"
@@ -115,6 +165,11 @@ class GameSession:
                 "mode": self.config.mode,
                 "human_side": self.config.human_side,
                 "ai_depth": self.config.ai_depth,
+                "board_layout": self.config.board_layout,
+                "player1_time_ms": self.config.player1_time_ms,
+                "player2_time_ms": self.config.player2_time_ms,
+                "max_moves": self.config.max_moves,
+                "time_limit_per_move_s": self.config.time_limit_per_move_s,
             },
         }
 
@@ -207,16 +262,33 @@ class GameSession:
 
     def reset(self) -> dict:
         self.board = Board()
-        self.board.setup_standard()
+        self.board.setup_layout(self.config.board_layout)
         self.current_player = BLACK
         self.move_history = []
-        self.time_left_ms = {BLACK: self.initial_time_ms, WHITE: self.initial_time_ms}
+
+        # Use per-player time from config, fallback to initial_time_ms
+        p1_time = self.config.player1_time_ms if self.config.player1_time_ms > 0 else self.initial_time_ms
+        p2_time = self.config.player2_time_ms if self.config.player2_time_ms > 0 else self.initial_time_ms
+        self.time_left_ms = {BLACK: p1_time, WHITE: p2_time}
+
         now = self._now_ms()
         self.last_clock_update_ms = now
         self.turn_start_ms = now
         self.pause_start_ms = None
         self.paused = False
+        self.started = True
+        self._resigned = False
+        self._resign_winner = None
         return {"ok": True}
+
+    def resign(self, payload: Optional[Mapping] = None) -> dict:
+        """Current player resigns. Opponent wins."""
+        if self._status()["game_over"]:
+            return {"error": "Game is already over"}
+
+        self._resigned = True
+        self._resign_winner = WHITE if self.current_player == BLACK else BLACK
+        return {"ok": True, "winner": self._resign_winner}
 
     def toggle_pause(self) -> dict:
         self._tick_clock()
@@ -237,6 +309,7 @@ class GameSession:
 
     def state_json(self) -> dict:
         self._tick_clock()
+        self._check_move_time_limit()
         status = self._status()
 
         cells = {}
@@ -278,6 +351,9 @@ class GameSession:
             "mode": self.config.mode,
             "human_side": self.config.human_side,
             "ai_depth": self.config.ai_depth,
+            "board_layout": self.config.board_layout,
+            "max_moves": self.config.max_moves,
+            "time_limit_per_move_s": self.config.time_limit_per_move_s,
             "score": self.board.score,
             "game_over": status["game_over"],
             "winner": status["winner"],
@@ -295,4 +371,6 @@ class GameSession:
             },
             "paused": self.paused,
             "initial_time_ms": self.initial_time_ms,
+            "turn_start_ms": self.turn_start_ms,
+            "started": self.started,
         }
