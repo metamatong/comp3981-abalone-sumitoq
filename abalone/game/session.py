@@ -382,8 +382,11 @@ class GameSession:
             )
 
         last_move_marbles = []
+        last_move_direction = []
         if self.move_history:
             last_move_marbles = list(self.move_history[-1].get("moved_to", []))
+            dr, dc = self.move_history[-1]["move"].direction
+            last_move_direction = [dr, dc]
 
         controllers = {str(player): ctrl for player, ctrl in self.controllers.items()}
         return {
@@ -405,6 +408,7 @@ class GameSession:
             "legal_moves": legal_list,
             "history": history,
             "last_move_marbles": last_move_marbles,
+            "last_move_direction": last_move_direction,
             "marble_counts": {
                 BLACK: self.board.marble_count(BLACK),
                 WHITE: self.board.marble_count(WHITE),

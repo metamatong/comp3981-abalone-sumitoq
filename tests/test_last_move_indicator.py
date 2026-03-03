@@ -11,6 +11,7 @@ class LastMoveIndicatorTests(unittest.TestCase):
         session = GameSession()
         state = session.state_json()
         self.assertEqual(state["last_move_marbles"], [])
+        self.assertEqual(state["last_move_direction"], [])
 
     def test_last_move_marbles_match_changed_positions(self):
         session = GameSession()
@@ -35,6 +36,7 @@ class LastMoveIndicatorTests(unittest.TestCase):
 
         next_state = session.state_json()
         self.assertEqual(set(next_state["last_move_marbles"]), expected)
+        self.assertEqual(next_state["last_move_direction"], move_payload["direction"])
 
     def test_undo_clears_last_move_marbles_when_history_is_empty(self):
         session = GameSession()
@@ -46,6 +48,7 @@ class LastMoveIndicatorTests(unittest.TestCase):
 
         state = session.state_json()
         self.assertEqual(state["last_move_marbles"], [])
+        self.assertEqual(state["last_move_direction"], [])
 
 
 if __name__ == "__main__":

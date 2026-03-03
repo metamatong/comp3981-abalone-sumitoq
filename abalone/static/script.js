@@ -465,12 +465,23 @@ function getLastMovedSet() {
     if (!state || !Array.isArray(state.last_move_marbles)) return new Set();
     return new Set(state.last_move_marbles);
 }
+function getLastMoveDirection() {
+    if (!state || !Array.isArray(state.last_move_direction) || state.last_move_direction.length !== 2) return null;
+    return state.last_move_direction;
+}
+function directionToAngle(direction) {
+    const [dr, dc] = direction;
+    const dx = H_SP * (dc - dr / 2);
+    const dy = -V_SP * dr;
+    return Math.atan2(dy, dx) * (180 / Math.PI);
+}
 
 /* ── Board SVG ─────────────────────────────────────────── */
 function renderBoard() {
     const svg = document.getElementById('board');
     const dests = getValidDestinations();
     const lastMoved = getLastMovedSet();
+    const lastMoveDirection = getLastMoveDirection();
     let h = '';
 
     /* ── Defs: shared gradients ── */
@@ -502,7 +513,7 @@ function renderBoard() {
         const val = state.cells[ps] ?? EMPTY;
         const sel = selected.includes(ps);
         const dst = ps in dests;
-        h += cell(x, y, r, c, ps, val, sel, dst, lastMoved.has(ps));
+        h += cell(x, y, r, c, ps, val, sel, dst, lastMoved.has(ps), lastMoveDirection);
     }
 
     /* ── Edge labels: row letters on both sides ── */
@@ -555,7 +566,7 @@ function boardHex() {
     return `<path d="${d}" fill="#1a2d3d" stroke="#2a4050" stroke-width="2.5"/>`;
 }
 
-function cell(x, y, r, c, ps, val, sel, dst, lastMoved) {
+function cell(x, y, r, c, ps, val, sel, dst, lastMoved, lastMoveDirection) {
     let h = '';
     const click = `onclick="toggleSelect('${ps}')"`;
 
@@ -574,6 +585,9 @@ function cell(x, y, r, c, ps, val, sel, dst, lastMoved) {
         if (lastMoved) {
             h += `<circle cx="${x}" cy="${y}" r="${R + 2.5}" fill="none"
         stroke="#6EC886FF" stroke-width="1.8" opacity=".55" style="pointer-events:none"/>`;
+            if (lastMoveDirection) {
+                h += movedDirectionMarker(x, y, lastMoveDirection);
+            }
         }
         if (sel) {
             h += `<circle cx="${x}" cy="${y}" r="${R + 1}" fill="none"
@@ -596,6 +610,18 @@ function cell(x, y, r, c, ps, val, sel, dst, lastMoved) {
     }
 
     return h;
+}
+
+function movedDirectionMarker(x, y, direction) {
+    const angle = directionToAngle(direction);
+    const rad = angle * (Math.PI / 180);
+    const offset = R - 11;
+    const tx = x + Math.cos(rad) * offset;
+    const ty = y + Math.sin(rad) * offset;
+    return `<g transform="translate(${tx.toFixed(2)} ${ty.toFixed(2)}) rotate(${angle.toFixed(2)})">
+      <path d="M0,-6 L10,0 L0,6" fill="none" stroke="#7BF1A8" stroke-width="4.2"
+      stroke-linecap="round" stroke-linejoin="round" opacity=".98" style="pointer-events:none"/>
+    </g>`;
 }
 
 /* ── History ───────────────────────────────────────────── */
