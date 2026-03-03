@@ -410,6 +410,20 @@ function renderMoveTimers() {
 function renderScore() {
     document.getElementById('p1-score').textContent = state.score['2'];
     document.getElementById('p2-score').textContent = state.score['1'];
+
+    let blackMoves = 0;
+    let whiteMoves = 0;
+    for (const entry of state.history) {
+        if (entry.player === BLACK) blackMoves += 1;
+        if (entry.player === WHITE) whiteMoves += 1;
+    }
+    document.getElementById('p1-moves-made').textContent = String(whiteMoves);
+    document.getElementById('p2-moves-made').textContent = String(blackMoves);
+
+    const totalMoves = state.history.length;
+    const maxMoves = Number(state.max_moves || 0);
+    const maxLabel = maxMoves > 0 ? String(maxMoves) : '∞';
+    document.getElementById('move-count').textContent = `${totalMoves}/${maxLabel}`;
 }
 
 function renderControllers() {
@@ -636,8 +650,6 @@ function formatDuration(ms) {
 
 function renderHistory() {
     const el = document.getElementById('history-list');
-    const countEl = document.getElementById('move-count');
-    countEl.textContent = `${state.history.length} moves`;
 
     /* Build a key from length + last move notation to detect changes */
     const last = state.history.length ? state.history[state.history.length - 1].notation : '';
@@ -662,7 +674,7 @@ function renderHistory() {
       <span class="history-player" style="color:${symColor}">${sym}</span>
       <span class="history-source">${src}</span>
       <span class="history-move">${e.notation}</span>
-      ${e.pushoff ? '<span class="history-push">pushed off!</span>' : ''}
+      ${e.pushoff ? '<span class="history-push">dislodged!</span>' : ''}
       <span class="history-time">${dur}</span>
     </div>`;
     }

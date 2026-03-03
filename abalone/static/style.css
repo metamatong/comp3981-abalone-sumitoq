@@ -191,9 +191,24 @@ body {
 }
 
 .player-card .score-value {
-  font-size: 46px;
+  font-size: 80px;
   font-weight: 700;
   color: #dce7ef;
+}
+
+.player-card .moves-made-label {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #5a7890;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.player-card .moves-made-value {
+  margin-top: 2px;
+  font-size: 28px;
+  font-weight: 700;
+  color: #b8c8d4;
 }
 
 
@@ -255,8 +270,10 @@ body {
 
 .history-card .move-count {
   font-size: 15px;
-  color: #5a7890;
-  font-weight: 400;
+  color: #6a84a0;
+  font-weight: 600;
+  font-family: 'SF Mono', Consolas, monospace;
+  letter-spacing: .2px;
 }
 
 #history-list {
