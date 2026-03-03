@@ -2,13 +2,13 @@
 
 import time
 from collections.abc import Mapping
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from ..players.agent import choose_move_with_info
 from ..players.types import AgentConfig
 from ..players.validator import validate_move, validate_payload_move
 from ..state_space import generate_legal_moves
-from .board import BLACK, WHITE, Board, pos_to_str
+from .board import BLACK, WHITE, Board, is_valid, neighbor, pos_to_str, str_to_pos
 from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 
 
@@ -189,6 +189,23 @@ class GameSession:
         self._tick_clock()
         return self._status()
 
+    def _moved_positions(self, move, result: Mapping) -> List[str]:
+        """Return board coordinates occupied by marbles that moved in this turn."""
+        moved: Set[str] = set()
+
+        for marble in move.marbles:
+            dest = neighbor(marble, move.direction)
+            if is_valid(dest):
+                moved.add(pos_to_str(dest))
+
+        for pushed in result.get("pushed", []):
+            pushed_pos = str_to_pos(pushed)
+            dest = neighbor(pushed_pos, move.direction)
+            if is_valid(dest):
+                moved.add(pos_to_str(dest))
+
+        return sorted(moved)
+
     def _apply_move(self, move, source: str, search: Optional[dict] = None) -> dict:
         """Apply a validated move, record history entry, and advance the turn."""
         player = self.current_player
@@ -199,10 +216,12 @@ class GameSession:
         duration_ms = max(0, now - self.turn_start_ms)
 
         result = self.board.apply_move(move, player)
+        moved_to = self._moved_positions(move, result)
         self.move_history.append(
             {
                 "move": move,
                 "result": result,
+                "moved_to": moved_to,
                 "snapshot": snapshot,
                 "clock_snapshot": clock_snapshot,
                 "player": player,
@@ -362,6 +381,10 @@ class GameSession:
                 }
             )
 
+        last_move_marbles = []
+        if self.move_history:
+            last_move_marbles = list(self.move_history[-1].get("moved_to", []))
+
         controllers = {str(player): ctrl for player, ctrl in self.controllers.items()}
         return {
             "cells": cells,
@@ -381,6 +404,7 @@ class GameSession:
             "game_over_reason": status["game_over_reason"],
             "legal_moves": legal_list,
             "history": history,
+            "last_move_marbles": last_move_marbles,
             "marble_counts": {
                 BLACK: self.board.marble_count(BLACK),
                 WHITE: self.board.marble_count(WHITE),

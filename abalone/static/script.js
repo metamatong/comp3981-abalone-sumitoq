@@ -456,10 +456,16 @@ function renderEndBanner() {
     el.textContent = msg.banner;
 }
 
+function getLastMovedSet() {
+    if (!state || !Array.isArray(state.last_move_marbles)) return new Set();
+    return new Set(state.last_move_marbles);
+}
+
 /* ── Board SVG ─────────────────────────────────────────── */
 function renderBoard() {
     const svg = document.getElementById('board');
     const dests = getValidDestinations();
+    const lastMoved = getLastMovedSet();
     let h = '';
 
     /* ── Defs: shared gradients ── */
@@ -491,7 +497,7 @@ function renderBoard() {
         const val = state.cells[ps] ?? EMPTY;
         const sel = selected.includes(ps);
         const dst = ps in dests;
-        h += cell(x, y, r, c, ps, val, sel, dst);
+        h += cell(x, y, r, c, ps, val, sel, dst, lastMoved.has(ps));
     }
 
     /* ── Edge labels: row letters on both sides ── */
@@ -544,7 +550,7 @@ function boardHex() {
     return `<path d="${d}" fill="#1a2d3d" stroke="#2a4050" stroke-width="2.5"/>`;
 }
 
-function cell(x, y, r, c, ps, val, sel, dst) {
+function cell(x, y, r, c, ps, val, sel, dst, lastMoved) {
     let h = '';
     const click = `onclick="toggleSelect('${ps}')"`;
 
@@ -555,9 +561,15 @@ function cell(x, y, r, c, ps, val, sel, dst) {
     if (val === BLACK || val === WHITE) {
         const grad = val === BLACK ? 'url(#gBlack)' : 'url(#gWhite)';
         const strokeNorm = val === BLACK ? '#000' : '#888';
+        const stroke = sel ? '#4fc3f7' : (lastMoved ? '#3a7c4c' : strokeNorm);
+        const strokeWidth = sel ? 3 : (lastMoved ? 2.2 : 1.2);
         h += `<circle cx="${x}" cy="${y}" r="${R - 3}" fill="${grad}"
-      stroke="${sel ? '#4fc3f7' : strokeNorm}" stroke-width="${sel ? 3 : 1.2}"
+      stroke="${stroke}" stroke-width="${strokeWidth}"
       filter="url(#shadow)" ${click} style="cursor:pointer"/>`;
+        if (lastMoved) {
+            h += `<circle cx="${x}" cy="${y}" r="${R + 2.5}" fill="none"
+        stroke="#6EC886FF" stroke-width="1.8" opacity=".55" style="pointer-events:none"/>`;
+        }
         if (sel) {
             h += `<circle cx="${x}" cy="${y}" r="${R + 1}" fill="none"
         stroke="#4fc3f7" stroke-width="2" opacity=".55" style="pointer-events:none"/>`;
