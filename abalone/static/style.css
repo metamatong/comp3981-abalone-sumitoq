@@ -33,7 +33,7 @@ body {
 }
 
 #game-timer-label {
-  font-size: 11px;
+  font-size: 15px;
   color: #5a7890;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -41,7 +41,7 @@ body {
 }
 
 #game-timer {
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
   font-family: 'SF Mono', Consolas, monospace;
   color: #4fc3f7;
@@ -49,7 +49,7 @@ body {
 }
 
 #top-bar h1 {
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
   letter-spacing: 2px;
   color: #e8e8e8;
@@ -57,7 +57,7 @@ body {
 }
 
 #top-bar .subtitle {
-  font-size: 11px;
+  font-size: 15px;
   color: #5a7890;
   letter-spacing: 1px;
   margin-top: 2px;
@@ -142,27 +142,27 @@ body {
 }
 
 .player-card .player-name {
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
   color: #dce7ef
 }
 
 .player-card .player-color {
-  font-size: 11px;
+  font-size: 15px;
   color: #5a7890;
   letter-spacing: .5px
 }
 
 .player-card .player-role {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: 14px;
   color: #8ea7ba;
   letter-spacing: .6px;
   text-transform: uppercase;
 }
 
 .player-card .player-timer {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
   font-family: 'SF Mono', Consolas, monospace;
   color: #8ea7ba;
@@ -183,7 +183,7 @@ body {
 }
 
 .player-card .score-label {
-  font-size: 11px;
+  font-size: 15px;
   color: #5a7890;
   letter-spacing: .5px;
   text-transform: uppercase;
@@ -191,7 +191,7 @@ body {
 }
 
 .player-card .score-value {
-  font-size: 38px;
+  font-size: 46px;
   font-weight: 700;
   color: #dce7ef;
 }
@@ -199,7 +199,7 @@ body {
 
 /* ── Game controls ───────────────────────────────────────── */
 .controls-card h3 {
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 700;
   color: #dce7ef;
   margin-bottom: 12px;
@@ -220,7 +220,7 @@ body {
   background: #1e2d3d;
   border: 1px solid #2a4050;
   color: #8ea7ba;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: all .15s;
@@ -232,7 +232,7 @@ body {
 }
 
 .ctrl-btn .icon {
-  font-size: 14px;
+  font-size: 18px;
   width: 18px;
   text-align: center
 }
@@ -244,7 +244,7 @@ body {
 
 /* ── Move history ────────────────────────────────────────── */
 .history-card h3 {
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 700;
   color: #dce7ef;
   margin-bottom: 8px;
@@ -254,7 +254,7 @@ body {
 }
 
 .history-card .move-count {
-  font-size: 11px;
+  font-size: 15px;
   color: #5a7890;
   font-weight: 400;
 }
@@ -262,7 +262,7 @@ body {
 #history-list {
   max-height: 400px;
   overflow-y: auto;
-  font-size: 11px;
+  font-size: 15px;
   font-family: 'SF Mono', Consolas, monospace;
 }
 
@@ -310,7 +310,7 @@ body {
 .history-time {
   margin-left: auto;
   color: #5a7890;
-  font-size: 10px;
+  font-size: 14px;
   font-family: 'SF Mono', Consolas, monospace;
   white-space: nowrap;
 }
@@ -352,7 +352,7 @@ svg#board {
   margin: 8px auto;
   padding: 10px 16px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: .2px;
   text-align: center;
@@ -414,14 +414,14 @@ svg#board {
 }
 
 #game-over-box h2 {
-  font-size: 34px;
+  font-size: 42px;
   margin-bottom: 8px
 }
 
 #go-reason {
   margin-bottom: 10px;
   color: #c5d8e3;
-  font-size: 15px
+  font-size: 19px
 }
 
 #game-over-box p {
@@ -433,7 +433,7 @@ svg#board {
   padding: 8px 20px;
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 17px;
   cursor: pointer;
   font-weight: 600;
   background: #3d6b99;
@@ -453,7 +453,7 @@ svg#board {
   background: none;
   border: none;
   color: #8ea7ba;
-  font-size: 24px;
+  font-size: 32px;
   cursor: pointer;
   padding: 4px 8px;
   line-height: 1;
@@ -502,19 +502,19 @@ svg#board {
 }
 
 #game-config-box h2 {
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
   color: #dce7ef;
   margin-bottom: 4px;
 }
 
 #game-config-box h2 .icon {
-  font-size: 20px;
+  font-size: 26px;
   color: #8ea7ba;
 }
 
 .config-subtitle {
-  font-size: 13px;
+  font-size: 17px;
   color: #5a7890;
   margin-bottom: 20px;
 }
@@ -525,7 +525,7 @@ svg#board {
 
 .config-label {
   display: block;
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 700;
   color: #dce7ef;
   margin-bottom: 8px;
@@ -533,7 +533,7 @@ svg#board {
 
 .config-sublabel {
   display: block;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
   color: #8ea7ba;
   margin-bottom: 4px;
@@ -546,7 +546,7 @@ svg#board {
   background: #1e2d3d;
   border: 1px solid #2a4050;
   color: #dce7ef;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
   cursor: pointer;
   appearance: none;
@@ -572,7 +572,7 @@ svg#board {
   align-items: center;
   gap: 10px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 18px;
   color: #c5d8e3;
 }
 
@@ -640,7 +640,7 @@ svg#board {
   background: #1e2d3d;
   border: 1px solid #2a4050;
   color: #dce7ef;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 500;
 }
 
@@ -678,7 +678,7 @@ svg#board {
   background: #1e2d3d;
   border: 1px solid #2a4050;
   color: #dce7ef;
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
   cursor: pointer;
   transition: all .15s;
@@ -694,7 +694,7 @@ svg#board {
 .how-list-modal {
   list-style: disc;
   padding-left: 18px;
-  font-size: 14px;
+  font-size: 18px;
   color: #8ea7ba;
   line-height: 1.9;
   margin-top: 16px;
@@ -713,7 +713,7 @@ svg#board {
   border-radius: 10px;
   justify-content: center;
   align-items: center;
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 700;
   color: #4fc3f7;
   letter-spacing: 1px;

@@ -502,22 +502,22 @@ function renderBoard() {
         const left = hexPx(r, cmin);
         const right = hexPx(r, cmax);
         h += `<text x="${left.x - R - 16}" y="${left.y + 5}" text-anchor="middle"
-      font-size="14" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
+      font-size="18" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
         h += `<text x="${right.x + R + 16}" y="${right.y + 5}" text-anchor="middle"
-      font-size="14" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
+      font-size="18" fill="#5a8a9e" font-weight="700" font-family="monospace">${letter}</text>`;
     }
 
     /* ── Column numbers along bottom-left diagonal (row a) ── */
     for (let c = 1; c <= 5; c++) {
         const { x, y } = hexPx(0, c);
         h += `<text x="${x}" y="${y + R + 18}" text-anchor="middle"
-      font-size="13" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
+      font-size="17" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
     }
     /* ── Column numbers along top-right diagonal (row i) ── */
     for (let c = 5; c <= 9; c++) {
         const { x, y } = hexPx(8, c);
         h += `<text x="${x}" y="${y - R - 10}" text-anchor="middle"
-      font-size="13" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
+      font-size="17" fill="#5a8a9e" font-weight="700" font-family="monospace">${c}</text>`;
     }
 
     svg.innerHTML = h;
@@ -565,7 +565,7 @@ function cell(x, y, r, c, ps, val, sel, dst) {
     } else {
         /* Empty — show coordinate */
         h += `<text x="${x}" y="${y + 4}" text-anchor="middle"
-      font-size="11" fill="#3e6070" font-family="monospace" font-weight="600"
+      font-size="15" fill="#3e6070" font-family="monospace" font-weight="600"
       ${click} style="cursor:pointer;pointer-events:all">${ps}</text>`;
     }
 
