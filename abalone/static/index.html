@@ -109,7 +109,7 @@
     </div>
   </div>
 
-  <!-- Game Config Modal (2 pages) -->
+  <!-- Game Config Modal -->
   <div id="game-config-modal">
     <div id="game-config-box">
       <button class="modal-close-btn" id="config-close-btn" onclick="closeGameConfigModal()"
@@ -188,20 +188,24 @@
           </div>
         </div>
 
-        <button class="config-primary-btn" onclick="showConfigPage(2)">Next</button>
-      </div>
-
-      <!-- Page 2: How to Play -->
-      <div id="config-page-2" class="config-page" style="display:none">
-        <h2><span class="icon">ⓘ</span> How to Play:</h2>
-        <ul class="how-list-modal">
-          <li>Click 1–3 of your marbles in a line to select them</li>
-          <li>Click a highlighted cell to move</li>
-          <li>Push opponent marbles when you outnumber them inline (Sumito)</li>
-          <li>Push 6 opponent marbles off the board to win</li>
-        </ul>
         <button class="config-primary-btn" onclick="startGame()">Start Game</button>
       </div>
+    </div>
+  </div>
+
+  <button id="help-button" type="button" aria-label="How to Play" title="How to Play" onclick="openHowToPlayModal()">?</button>
+
+  <div id="how-to-play-modal">
+    <div id="how-to-play-box">
+      <button class="modal-close-btn" onclick="closeHowToPlayModal()">&times;</button>
+      <h2><span class="icon">ⓘ</span> How to Play</h2>
+      <ul class="how-list-modal">
+        <li>Click 1–3 of your marbles in a line to select them</li>
+        <li>Click a highlighted cell to move</li>
+        <li>Push opponent marbles when you outnumber them inline (Sumito)</li>
+        <li>Push 6 opponent marbles off the board to win</li>
+      </ul>
+      <button class="config-primary-btn" onclick="closeHowToPlayModal()">Close</button>
     </div>
   </div>
 

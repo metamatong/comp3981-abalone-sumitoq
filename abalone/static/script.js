@@ -109,7 +109,6 @@ async function openGameConfigModal() {
         wasPausedBeforeModal = state?.paused || false;
     }
     gameStarted = false;
-    showConfigPage(1);
     document.getElementById('game-config-modal').classList.add('show');
 }
 async function closeGameConfigModal() {
@@ -121,9 +120,15 @@ async function closeGameConfigModal() {
     }
     gameStarted = hasPlayedGame;
 }
-function showConfigPage(page) {
-    document.getElementById('config-page-1').style.display = page === 1 ? 'block' : 'none';
-    document.getElementById('config-page-2').style.display = page === 2 ? 'block' : 'none';
+
+function isHowToModalOpen() {
+    return document.getElementById('how-to-play-modal').classList.contains('show');
+}
+function openHowToPlayModal() {
+    document.getElementById('how-to-play-modal').classList.add('show');
+}
+function closeHowToPlayModal() {
+    document.getElementById('how-to-play-modal').classList.remove('show');
 }
 
 async function startGame() {
@@ -180,7 +185,7 @@ function closeGameOver() {
 
 /* ── Selection ─────────────────────────────────────────── */
 function toggleSelect(ps) {
-    if (!gameStarted || isConfigModalOpen()) return;
+    if (!gameStarted || isConfigModalOpen() || isHowToModalOpen()) return;
     if (state.game_over) return;
     if (state.paused) return;
     if (state.current_controller !== CONTROLLER_HUMAN) return;
@@ -653,6 +658,12 @@ function showGameOver() {
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
 openGameConfigModal();
+document.getElementById('how-to-play-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'how-to-play-modal') closeHowToPlayModal();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isHowToModalOpen()) closeHowToPlayModal();
+});
 setInterval(() => { if (state) { renderGameTimer(); renderMoveTimers(); } }, 250);
 setInterval(() => { fetchState(); }, 1000);
 setInterval(() => { maybeAutoAgentTurn(); }, 300);

@@ -690,6 +690,81 @@ svg#board {
   color: #fff;
 }
 
+/* ── Help button ─────────────────────────────────────────── */
+#help-button {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  border: 1px solid #2a4050;
+  background: #1b2b3a;
+  color: #dce7ef;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 9;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .4);
+  transition: transform .15s ease, background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+#help-button:hover {
+  background: #23384b;
+  border-color: #4fc3f7;
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+/* ── How to Play popup ───────────────────────────────────── */
+#how-to-play-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .72);
+  justify-content: center;
+  align-items: center;
+  z-index: 13;
+}
+
+#how-to-play-modal.show {
+  display: flex;
+}
+
+#how-to-play-box {
+  position: relative;
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: #141e2b;
+  padding: 32px 34px;
+  border-radius: 14px;
+  border: 1px solid #1e2d3d;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .55);
+}
+
+#how-to-play-box::-webkit-scrollbar {
+  width: 4px;
+}
+
+#how-to-play-box::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+#how-to-play-box h2 {
+  font-size: 30px;
+  font-weight: 700;
+  color: #dce7ef;
+  margin-bottom: 6px;
+}
+
+#how-to-play-box h2 .icon {
+  font-size: 26px;
+  color: #8ea7ba;
+}
+
 /* ── How to Play (in modal) ──────────────────────────────── */
 .how-list-modal {
   list-style: disc;
@@ -702,6 +777,16 @@ svg#board {
 
 .how-list-modal li {
   margin-bottom: 4px;
+}
+
+@media (max-width: 900px) {
+  #help-button {
+    left: 12px;
+    bottom: 12px;
+    width: 50px;
+    height: 50px;
+    font-size: 26px;
+  }
 }
 
 /* ── Pause overlay ───────────────────────────────────────── */
