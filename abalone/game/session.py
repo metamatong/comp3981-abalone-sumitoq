@@ -13,7 +13,7 @@ from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 
 
 class GameSession:
-    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 10 * 60 * 1000):
+    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 30 * 60 * 1000):
         self.initial_time_ms = initial_time_ms
         self.config = config or GameConfig()
 
@@ -51,7 +51,6 @@ class GameSession:
                 "game_over": True,
                 "winner": self._resign_winner,
                 "game_over_reason": "resign",
-                "timeout_player": None,
             }
 
         if self.board.score[BLACK] >= 6:
@@ -59,7 +58,6 @@ class GameSession:
                 "game_over": True,
                 "winner": BLACK,
                 "game_over_reason": "score",
-                "timeout_player": None,
             }
 
         if self.board.score[WHITE] >= 6:
@@ -67,23 +65,21 @@ class GameSession:
                 "game_over": True,
                 "winner": WHITE,
                 "game_over_reason": "score",
-                "timeout_player": None,
             }
 
-        if self.time_left_ms[BLACK] <= 0:
+        # Timeout: shared game time expired (sum of both clocks)
+        total_time_left = self.time_left_ms[BLACK] + self.time_left_ms[WHITE]
+        if total_time_left <= 0:
+            if self.board.score[BLACK] > self.board.score[WHITE]:
+                winner = BLACK
+            elif self.board.score[WHITE] > self.board.score[BLACK]:
+                winner = WHITE
+            else:
+                winner = None  # draw
             return {
                 "game_over": True,
-                "winner": WHITE,
+                "winner": winner,
                 "game_over_reason": "timeout",
-                "timeout_player": BLACK,
-            }
-
-        if self.time_left_ms[WHITE] <= 0:
-            return {
-                "game_over": True,
-                "winner": BLACK,
-                "game_over_reason": "timeout",
-                "timeout_player": WHITE,
             }
 
         # Max moves check
@@ -99,14 +95,12 @@ class GameSession:
                 "game_over": True,
                 "winner": winner,
                 "game_over_reason": "max_moves",
-                "timeout_player": None,
             }
 
         return {
             "game_over": False,
             "winner": None,
             "game_over_reason": None,
-            "timeout_player": None,
         }
 
     def _tick_clock(self):
@@ -125,14 +119,21 @@ class GameSession:
         """If per-move time limit is exceeded, auto-switch to next player."""
         if not self.started:
             return
-        if self.config.time_limit_per_move_s <= 0:
+
+        # Use per-player turn time limit
+        if self.current_player == BLACK:
+            turn_limit_s = self.config.player1_time_per_turn_s
+        else:
+            turn_limit_s = self.config.player2_time_per_turn_s
+
+        if turn_limit_s <= 0:
             return
         if self._status()["game_over"] or self.paused:
             return
 
         now = self._now_ms()
         elapsed_ms = max(0, now - self.turn_start_ms)
-        limit_ms = self.config.time_limit_per_move_s * 1000
+        limit_ms = turn_limit_s * 1000
 
         if elapsed_ms >= limit_ms:
             # Auto-switch turn (skip current player's move)
@@ -166,10 +167,10 @@ class GameSession:
                 "human_side": self.config.human_side,
                 "ai_depth": self.config.ai_depth,
                 "board_layout": self.config.board_layout,
-                "player1_time_ms": self.config.player1_time_ms,
-                "player2_time_ms": self.config.player2_time_ms,
+                "game_time_ms": self.config.game_time_ms,
                 "max_moves": self.config.max_moves,
-                "time_limit_per_move_s": self.config.time_limit_per_move_s,
+                "player1_time_per_turn_s": self.config.player1_time_per_turn_s,
+                "player2_time_per_turn_s": self.config.player2_time_per_turn_s,
             },
         }
 
@@ -266,10 +267,11 @@ class GameSession:
         self.current_player = BLACK
         self.move_history = []
 
-        # Use per-player time from config, fallback to initial_time_ms
-        p1_time = self.config.player1_time_ms if self.config.player1_time_ms > 0 else self.initial_time_ms
-        p2_time = self.config.player2_time_ms if self.config.player2_time_ms > 0 else self.initial_time_ms
-        self.time_left_ms = {BLACK: p1_time, WHITE: p2_time}
+        # Use shared game time from config, fallback to initial_time_ms
+        # Each player gets half the total game time
+        game_time = self.config.game_time_ms if self.config.game_time_ms > 0 else self.initial_time_ms
+        per_player_time = game_time // 2
+        self.time_left_ms = {BLACK: per_player_time, WHITE: per_player_time}
 
         now = self._now_ms()
         self.last_clock_update_ms = now
@@ -353,12 +355,12 @@ class GameSession:
             "ai_depth": self.config.ai_depth,
             "board_layout": self.config.board_layout,
             "max_moves": self.config.max_moves,
-            "time_limit_per_move_s": self.config.time_limit_per_move_s,
+            "player1_time_per_turn_s": self.config.player1_time_per_turn_s,
+            "player2_time_per_turn_s": self.config.player2_time_per_turn_s,
             "score": self.board.score,
             "game_over": status["game_over"],
             "winner": status["winner"],
             "game_over_reason": status["game_over_reason"],
-            "timeout_player": status["timeout_player"],
             "legal_moves": legal_list,
             "history": history,
             "marble_counts": {

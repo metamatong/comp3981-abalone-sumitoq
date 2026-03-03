@@ -131,21 +131,20 @@ async function startGame() {
     const colorVal = document.querySelector('input[name="cfg-color"]:checked').value;
     const human_side = colorVal === 'black' ? 'black' : 'white';
     const board_layout = document.getElementById('cfg-layout').value;
-    const sameTime = document.getElementById('cfg-same-time').checked;
-    const p1Min = Number(document.getElementById('cfg-p1-time').value) || 0;
-    const p2Min = sameTime ? p1Min : (Number(document.getElementById('cfg-p2-time').value) || 0);
+    const gameTimeMin = Number(document.getElementById('cfg-game-time').value) || 0;
     const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
-    const time_limit_per_move_s = Number(document.getElementById('cfg-move-limit').value) || 0;
+    const player1_time_per_turn_s = Number(document.getElementById('cfg-p1-move-limit').value) || 0;
+    const player2_time_per_turn_s = Number(document.getElementById('cfg-p2-move-limit').value) || 0;
 
     const payload = {
         mode,
         human_side,
         board_layout,
         ai_depth: Number(state?.ai_depth || 2),
-        player1_time_ms: p1Min * 60 * 1000,
-        player2_time_ms: p2Min * 60 * 1000,
+        game_time_ms: gameTimeMin * 60 * 1000,
         max_moves,
-        time_limit_per_move_s,
+        player1_time_per_turn_s,
+        player2_time_per_turn_s,
     };
 
     await fetch('/api/config', {
@@ -164,25 +163,7 @@ async function startGame() {
     await fetchState(true);
 }
 
-/* Sync "same time" checkbox */
-document.getElementById('cfg-same-time').addEventListener('change', function () {
-    const p2Input = document.getElementById('cfg-p2-time');
-    if (this.checked) {
-        p2Input.value = document.getElementById('cfg-p1-time').value;
-        p2Input.disabled = true;
-    } else {
-        p2Input.disabled = false;
-    }
-});
-// Initialize P2 input state
-document.getElementById('cfg-p2-time').disabled = true;
 
-/* Sync P1 value → P2 when "same time" is checked */
-document.getElementById('cfg-p1-time').addEventListener('input', function () {
-    if (document.getElementById('cfg-same-time').checked) {
-        document.getElementById('cfg-p2-time').value = this.value;
-    }
-});
 
 /* ── Resign ────────────────────────────────────────────── */
 async function doResign() {
@@ -273,7 +254,7 @@ function getValidDestinations() {
 /* ── Render ────────────────────────────────────────────── */
 function render() {
     if (!state) return;
-    renderClocks();
+    renderGameTimer();
     renderMoveTimers();
     renderScore();
     renderControllers();
@@ -325,13 +306,20 @@ function gameOverText() {
     }
 
     if (reason === 'timeout') {
+        if (state.winner == null) {
+            return {
+                title: 'Draw!',
+                reason: `Game time expired. Score tied.`,
+                banner: `Draw: game time expired with tied score.`,
+                cls: 'timeout',
+            };
+        }
         const winner = winnerPlayer();
         const winnerName = winner === BLACK ? 'Black' : 'White';
-        const loserName = winner === BLACK ? 'White' : 'Black';
         return {
-            title: `${winnerName} Wins on Time!`,
-            reason: `${loserName} ran out of time (00:00).`,
-            banner: `${winnerName} wins: ${loserName}'s clock reached 00:00.`,
+            title: `${winnerName} Wins!`,
+            reason: `Game time expired. ${winnerName} captured more.`,
+            banner: `${winnerName} wins: game time expired.`,
             cls: 'timeout',
         };
     }
@@ -364,15 +352,24 @@ function formatClock(ms) {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-function renderClocks() {
-    document.getElementById('p1-timer').textContent = formatClock(getClockMs(WHITE));
-    document.getElementById('p2-timer').textContent = formatClock(getClockMs(BLACK));
+function renderGameTimer() {
+    const el = document.getElementById('game-timer');
+    if (!el) return;
+    // Total game time = sum of both players' remaining time
+    const totalMs = getClockMs(BLACK) + getClockMs(WHITE);
+    el.textContent = formatClock(totalMs);
 }
 
 function getMoveTimeLeftMs() {
     if (!state || !gameStarted || state.game_over || state.paused) return null;
-    if (!state.time_limit_per_move_s || state.time_limit_per_move_s <= 0) return null;
-    const limitMs = state.time_limit_per_move_s * 1000;
+
+    // Use per-player turn time limit
+    const turnLimitS = state.current_player === BLACK
+        ? state.player1_time_per_turn_s
+        : state.player2_time_per_turn_s;
+
+    if (!turnLimitS || turnLimitS <= 0) return null;
+    const limitMs = turnLimitS * 1000;
     const elapsed = Date.now() - stateFetchedAt + (stateFetchedAt - state.turn_start_ms);
     return Math.max(0, limitMs - elapsed);
 }
@@ -384,26 +381,24 @@ function renderMoveTimers() {
 
     if (moveMs == null) {
         p1El.textContent = '';
-        p1El.className = 'move-timer';
         p2El.textContent = '';
-        p2El.className = 'move-timer';
         return;
     }
 
     const secs = Math.ceil(moveMs / 1000);
-    const text = `${secs}`;
+    const text = `${secs}s`;
     const warn = secs <= 5;
 
     if (state.current_player === WHITE) {
         p1El.textContent = text;
-        p1El.className = warn ? 'move-timer warning' : 'move-timer';
+        p1El.style.color = warn ? '#e87' : '';
         p2El.textContent = '';
-        p2El.className = 'move-timer';
+        p2El.style.color = '';
     } else {
         p2El.textContent = text;
-        p2El.className = warn ? 'move-timer warning' : 'move-timer';
+        p2El.style.color = warn ? '#e87' : '';
         p1El.textContent = '';
-        p1El.className = 'move-timer';
+        p1El.style.color = '';
     }
 }
 
@@ -646,6 +641,6 @@ function showGameOver() {
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
 openGameConfigModal();
-setInterval(() => { if (state) { renderClocks(); renderMoveTimers(); } }, 250);
+setInterval(() => { if (state) { renderGameTimer(); renderMoveTimers(); } }, 250);
 setInterval(() => { fetchState(); }, 1000);
 setInterval(() => { maybeAutoAgentTurn(); }, 300);

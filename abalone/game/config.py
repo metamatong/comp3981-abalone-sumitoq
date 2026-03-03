@@ -22,10 +22,10 @@ class GameConfig:
     human_side: int = BLACK
     ai_depth: int = 2
     board_layout: str = "standard"
-    player1_time_ms: int = 0          # 0 = unlimited
-    player2_time_ms: int = 0
+    game_time_ms: int = 30 * 60 * 1000  # 0 = unlimited
     max_moves: int = 500
-    time_limit_per_move_s: int = 30
+    player1_time_per_turn_s: int = 30
+    player2_time_per_turn_s: int = 30
 
     def controllers(self) -> Dict[int, str]:
         if self.mode == MODE_HVH:
@@ -97,10 +97,10 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
     human_side = current.human_side
     ai_depth = current.ai_depth
     board_layout = current.board_layout
-    player1_time_ms = current.player1_time_ms
-    player2_time_ms = current.player2_time_ms
+    game_time_ms = current.game_time_ms
     max_moves = current.max_moves
-    time_limit_per_move_s = current.time_limit_per_move_s
+    player1_time_per_turn_s = current.player1_time_per_turn_s
+    player2_time_per_turn_s = current.player2_time_per_turn_s
 
     if "mode" in payload:
         mode = normalize_mode(payload["mode"])
@@ -110,22 +110,22 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
         ai_depth = normalize_depth(payload["ai_depth"])
     if "board_layout" in payload:
         board_layout = normalize_board_layout(payload["board_layout"])
-    if "player1_time_ms" in payload:
-        player1_time_ms = normalize_non_negative_int(payload["player1_time_ms"], "player1_time_ms")
-    if "player2_time_ms" in payload:
-        player2_time_ms = normalize_non_negative_int(payload["player2_time_ms"], "player2_time_ms")
+    if "game_time_ms" in payload:
+        game_time_ms = normalize_non_negative_int(payload["game_time_ms"], "game_time_ms")
     if "max_moves" in payload:
         max_moves = normalize_non_negative_int(payload["max_moves"], "max_moves")
-    if "time_limit_per_move_s" in payload:
-        time_limit_per_move_s = normalize_non_negative_int(payload["time_limit_per_move_s"], "time_limit_per_move_s")
+    if "player1_time_per_turn_s" in payload:
+        player1_time_per_turn_s = normalize_non_negative_int(payload["player1_time_per_turn_s"], "player1_time_per_turn_s")
+    if "player2_time_per_turn_s" in payload:
+        player2_time_per_turn_s = normalize_non_negative_int(payload["player2_time_per_turn_s"], "player2_time_per_turn_s")
 
     return GameConfig(
         mode=mode,
         human_side=human_side,
         ai_depth=ai_depth,
         board_layout=board_layout,
-        player1_time_ms=player1_time_ms,
-        player2_time_ms=player2_time_ms,
+        game_time_ms=game_time_ms,
         max_moves=max_moves,
-        time_limit_per_move_s=time_limit_per_move_s,
+        player1_time_per_turn_s=player1_time_per_turn_s,
+        player2_time_per_turn_s=player2_time_per_turn_s,
     )
