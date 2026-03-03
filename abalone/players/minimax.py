@@ -13,6 +13,8 @@ from .types import AgentConfig
 
 @dataclass(frozen=True)
 class SearchResult:
+    """Search output including chosen move and diagnostic metadata."""
+
     move: Optional[Move]
     score: float
     nodes: int
@@ -20,6 +22,7 @@ class SearchResult:
     depth: int
 
     def as_dict(self) -> Dict[str, object]:
+        """Serialize search diagnostics for CLI/API responses."""
         if self.move is None:
             notation = None
         else:
@@ -35,14 +38,17 @@ class SearchResult:
 
 
 def _opponent(player: int) -> int:
+    """Return the opposing color constant."""
     return WHITE if player == BLACK else BLACK
 
 
 def _is_terminal(board: Board) -> bool:
+    """Return whether either player has reached the capture win condition."""
     return board.score[BLACK] >= 6 or board.score[WHITE] >= 6
 
 
 def _is_push_move(board: Board, player: int, move: Move) -> bool:
+    """Heuristic check used for move ordering: whether move contacts an opponent inline."""
     if not move.is_inline or move.count < 2:
         return False
 
@@ -53,7 +59,9 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
 
 
 def _ordered_moves(board: Board, player: int, moves: List[Move]) -> List[Move]:
+    """Order moves to improve alpha-beta pruning deterministically."""
     def key(move: Move) -> Tuple[int, int, str]:
+        """Prioritize push moves, then larger groups, then lexical notation."""
         return (
             0 if _is_push_move(board, player, move) else 1,
             -move.count,
@@ -64,6 +72,7 @@ def _ordered_moves(board: Board, player: int, moves: List[Move]) -> List[Move]:
 
 
 def _prefer_by_tie_break(config: AgentConfig, candidate: Move, incumbent: Optional[Move]) -> bool:
+    """Resolve equal-valued moves using the configured deterministic tie-break."""
     if incumbent is None:
         return True
     if config.tie_break == "lexicographic":
@@ -81,6 +90,7 @@ def _minimax(
     config: AgentConfig,
     stats: Dict[str, int],
 ) -> Tuple[float, Optional[Move]]:
+    """Run depth-limited minimax with alpha-beta pruning and deterministic ordering."""
     stats["nodes"] += 1
 
     if depth == 0 or _is_terminal(board):
@@ -151,6 +161,7 @@ def _minimax(
 
 
 def search_best_move(board: Board, player: int, config: Optional[AgentConfig] = None) -> SearchResult:
+    """Return best move and diagnostics for `player` from current board position."""
     resolved_config = config or AgentConfig()
     stats = {"nodes": 0}
     start = time.perf_counter()

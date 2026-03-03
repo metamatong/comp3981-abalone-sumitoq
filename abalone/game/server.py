@@ -13,7 +13,10 @@ STATIC_DIR = os.path.join(PACKAGE_DIR, "static")
 
 
 class Handler(BaseHTTPRequestHandler):
+    """HTTP handler for static assets and the game JSON API."""
+
     def do_GET(self):
+        """Serve static frontend files and `/api/state`."""
         if self.path in ("/", "/index.html"):
             self._serve_file("index.html", "text/html")
         elif self.path == "/style.css":
@@ -26,6 +29,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        """Handle JSON API mutations such as moves, reset, and config."""
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -51,6 +55,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _json_response(self, data):
+        """Return a JSON response payload with status 200."""
         payload = json.dumps(data).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -59,6 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _serve_file(self, name: str, mime: str):
+        """Serve a static file from the packaged `static/` directory."""
         path = os.path.join(STATIC_DIR, name)
         with open(path, "rb") as file:
             data = file.read()
@@ -70,13 +76,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_message(self, fmt, *args):
+        """Suppress default request logs to keep terminal output clean."""
         pass
 
 
 def run(port: int = 9000):
+    """Run the local HTTP server and open the web UI in a browser."""
     import socket
     import webbrowser
 
+    # Probe the requested port and nearby candidates until one is available.
     for p in [port] + list(range(port + 1, port + 20)):
         try:
             sock = socket.socket()

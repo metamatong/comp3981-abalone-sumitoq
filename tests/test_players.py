@@ -6,7 +6,10 @@ from abalone.players.types import AgentConfig
 
 
 class MinimaxPlayerTests(unittest.TestCase):
+    """Regression checks for minimax move selection."""
+
     def test_choose_move_is_legal_and_deterministic(self):
+        """Agent should return a legal move and repeat deterministically."""
         board = Board()
         board.setup_standard()
 

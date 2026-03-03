@@ -13,7 +13,10 @@ from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 
 
 class GameSession:
-    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 30 * 60 * 1000):
+    """Own the mutable game runtime state shared by CLI and HTTP layers."""
+
+    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 10 * 60 * 1000):
+        """Initialize session state, timers, and a standard starting board."""
         self.initial_time_ms = initial_time_ms
         self.config = config or GameConfig()
 
@@ -35,16 +38,20 @@ class GameSession:
 
     @property
     def controllers(self) -> Dict[int, str]:
+        """Return per-player controller mapping (`human` or `ai`)."""
         return self.config.controllers()
 
     @property
     def current_controller(self) -> str:
+        """Return controller type for the side currently on turn."""
         return self.controllers[self.current_player]
 
     def _now_ms(self) -> int:
+        """Return current wall-clock time in milliseconds."""
         return int(time.time() * 1000)
 
     def _status(self) -> dict:
+        """Compute terminal status metadata without mutating session state."""
         # Check resign first
         if self._resigned:
             return {
@@ -104,6 +111,7 @@ class GameSession:
         }
 
     def _tick_clock(self):
+        """Update active player's remaining time based on elapsed wall-clock time."""
         now = self._now_ms()
         if not self.started or self._status()["game_over"] or self.paused:
             self.last_clock_update_ms = now
@@ -142,6 +150,7 @@ class GameSession:
             self.turn_start_ms = now
 
     def _before_turn_action(self) -> Optional[str]:
+        """Run shared pre-action checks and return an error message when blocked."""
         self._tick_clock()
         self._check_move_time_limit()
 
@@ -152,6 +161,7 @@ class GameSession:
         return None
 
     def configure(self, payload: Optional[Mapping]) -> dict:
+        """Apply a partial runtime config update and return normalized config values."""
         if payload is None:
             payload = {}
 
@@ -175,10 +185,12 @@ class GameSession:
         }
 
     def status(self) -> dict:
+        """Return current game status after advancing session clocks."""
         self._tick_clock()
         return self._status()
 
     def _apply_move(self, move, source: str, search: Optional[dict] = None) -> dict:
+        """Apply a validated move, record history entry, and advance the turn."""
         player = self.current_player
         snapshot = self.board.copy()
         clock_snapshot = dict(self.time_left_ms)
@@ -214,6 +226,7 @@ class GameSession:
         }
 
     def apply_human_move(self, payload: Optional[Mapping]) -> dict:
+        """Validate and apply a user-provided move payload for human-controlled turns."""
         error = self._before_turn_action()
         if error:
             return {"error": error}
@@ -228,6 +241,7 @@ class GameSession:
         return self._apply_move(move, source=CONTROLLER_HUMAN)
 
     def apply_agent_move(self) -> dict:
+        """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
         if error:
             return {"error": error}
@@ -249,6 +263,7 @@ class GameSession:
         return self._apply_move(move, source=CONTROLLER_AI, search=search_result.as_dict())
 
     def undo(self) -> dict:
+        """Revert the last move, including board and clock snapshots."""
         if not self.move_history:
             return {"error": "Nothing to undo"}
 
@@ -262,6 +277,7 @@ class GameSession:
         return {"ok": True}
 
     def reset(self) -> dict:
+        """Reset board, timers, and session flags using current config values."""
         self.board = Board()
         self.board.setup_layout(self.config.board_layout)
         self.current_player = BLACK
@@ -293,6 +309,7 @@ class GameSession:
         return {"ok": True, "winner": self._resign_winner}
 
     def toggle_pause(self) -> dict:
+        """Toggle pause state while preserving accurate per-turn timing."""
         self._tick_clock()
         now = self._now_ms()
         if not self.paused:
@@ -310,6 +327,7 @@ class GameSession:
         return {"ok": True, "paused": self.paused}
 
     def state_json(self) -> dict:
+        """Serialize full session state for the web client API contract."""
         self._tick_clock()
         self._check_move_time_limit()
         status = self._status()

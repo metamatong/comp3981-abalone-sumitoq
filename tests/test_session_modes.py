@@ -5,7 +5,10 @@ from abalone.game.session import GameSession
 
 
 class SessionModeTests(unittest.TestCase):
+    """Regression checks for session controller turn-gating."""
+
     def test_hva_turn_gating(self):
+        """Human-vs-AI mode should enforce controller ownership of each turn."""
         session = GameSession(config=GameConfig(mode=MODE_HVA, human_side=1, ai_depth=1))
 
         state = session.state_json()

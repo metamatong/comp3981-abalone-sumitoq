@@ -19,23 +19,30 @@ from .session import GameSession
 
 
 class Game:
+    """Interactive terminal game wrapper around `GameSession`."""
+
     def __init__(self, mode: str = MODE_HVH, human_side: int = BLACK, ai_depth: int = 2):
+        """Create a terminal game using the requested mode and AI depth."""
         config = GameConfig(mode=mode, human_side=human_side, ai_depth=ai_depth)
         self.session = GameSession(config=config)
 
     @property
     def board(self):
+        """Expose the current board for convenience in CLI helpers."""
         return self.session.board
 
     @property
     def current_player(self):
+        """Expose the color currently on turn."""
         return self.session.current_player
 
     @property
     def move_history(self):
+        """Expose applied move history entries."""
         return self.session.move_history
 
     def play(self):
+        """Run the terminal game loop until the session reaches a terminal state."""
         print("=== ABALONE ===")
         print("Type 'help' for commands.\n")
 
@@ -99,9 +106,11 @@ class Game:
         print(f"  Final score: Black {self.board.score[BLACK]} - {self.board.score[WHITE]} White")
 
     def is_game_over(self) -> bool:
+        """Return whether the game has ended."""
         return self.session.status()["game_over"]
 
     def _get_move(self) -> Optional[Move]:
+        """Read user input, execute meta-commands, and parse a move if provided."""
         try:
             raw = input("  Enter move> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -143,8 +152,10 @@ class Game:
         return move
 
     def _parse_move(self, text: str) -> Optional[Move]:
+        """Parse CLI notation into a `Move`, supporting inline and broadside forms."""
         try:
             if ">" in text:
+                # Broadside syntax: `{count}:{end1}-{end2}>{DIR}`.
                 head, dir_name = text.split(">")
                 dir_name = dir_name.upper()
                 if dir_name not in NAME_TO_DIR:
@@ -167,6 +178,7 @@ class Game:
                 return Move(marbles=marbles, direction=direction)
 
             parts = text.split(":")
+            # Inline syntax: `{count}:{trailing}{goal}`.
             count = int(parts[0])
             pos_str = parts[1]
             start = str_to_pos(pos_str[:2])
@@ -189,6 +201,7 @@ class Game:
             return None
 
     def _show_moves(self):
+        """Print legal move list grouped by marble count and inline/broadside type."""
         legal = generate_legal_moves(self.board, self.current_player)
         if not legal:
             print("  No legal moves!")
@@ -230,6 +243,7 @@ class Game:
         print()
 
     def _would_push(self, move: Move) -> bool:
+        """Return whether an inline move is currently facing an opponent marble."""
         if not move.is_inline or move.count < 2:
             return False
 
@@ -239,6 +253,7 @@ class Game:
         return is_valid(ahead) and self.board.cells.get(ahead) == opponent
 
     def _undo(self):
+        """Undo the most recent move and print the outcome."""
         result = self.session.undo()
         if "error" in result:
             print(f"  {result['error']}")
@@ -246,6 +261,7 @@ class Game:
         print("  Undid last move.")
 
     def _print_help(self):
+        """Print move notation and command help for the terminal UI."""
         print(
             """
   === Move notation ===

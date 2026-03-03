@@ -11,6 +11,7 @@ from .config import MODE_AVA, MODE_HVA, MODE_HVH
 
 
 def _print_state_space(state_depth_one: bool, state_player: str, state_child_index: int):
+    """Print legal-move summary for the initial board and optional depth-1 child."""
     board = Board()
     board.setup_standard()
     print(board.display())
@@ -52,6 +53,7 @@ def _print_state_space(state_depth_one: bool, state_player: str, state_child_ind
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for game and state-space modes."""
     parser = argparse.ArgumentParser(description="Play Abalone in the terminal.")
     parser.add_argument("--state-space", action="store_true", help="Print state-space analysis and exit.")
     parser.add_argument(
@@ -93,6 +95,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None):
+    """Parse CLI arguments and dispatch into play mode or state-space reporting."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 

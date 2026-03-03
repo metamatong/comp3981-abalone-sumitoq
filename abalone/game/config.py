@@ -18,6 +18,8 @@ VALID_LAYOUTS = {"standard", "belgian_daisy", "german_daisy"}
 
 @dataclass(frozen=True)
 class GameConfig:
+    """Runtime settings that determine controllers, layout, and timing behavior."""
+
     mode: str = MODE_HVH
     human_side: int = BLACK
     ai_depth: int = 2
@@ -28,6 +30,7 @@ class GameConfig:
     player2_time_per_turn_s: int = 30
 
     def controllers(self) -> Dict[int, str]:
+        """Return the per-color controller mapping derived from the selected mode."""
         if self.mode == MODE_HVH:
             return {BLACK: CONTROLLER_HUMAN, WHITE: CONTROLLER_HUMAN}
         if self.mode == MODE_AVA:
@@ -41,6 +44,7 @@ class GameConfig:
 
 
 def normalize_mode(value: object) -> str:
+    """Normalize and validate game mode input."""
     mode = str(value).strip().lower()
     if mode not in VALID_MODES:
         raise ValueError(f"Unsupported mode '{value}'.")
@@ -48,6 +52,7 @@ def normalize_mode(value: object) -> str:
 
 
 def normalize_human_side(value: object) -> int:
+    """Normalize and validate the side selected for a human player."""
     if isinstance(value, int):
         if value in (BLACK, WHITE):
             return value
@@ -62,6 +67,7 @@ def normalize_human_side(value: object) -> int:
 
 
 def normalize_depth(value: object) -> int:
+    """Normalize and validate search depth for the AI agent."""
     try:
         depth = int(value)
     except (TypeError, ValueError) as exc:
@@ -73,6 +79,7 @@ def normalize_depth(value: object) -> int:
 
 
 def normalize_board_layout(value: object) -> str:
+    """Normalize and validate board layout identifier."""
     layout = str(value).strip().lower()
     if layout not in VALID_LAYOUTS:
         raise ValueError(f"Unsupported board layout '{value}'.")
@@ -80,6 +87,7 @@ def normalize_board_layout(value: object) -> str:
 
 
 def normalize_non_negative_int(value: object, name: str) -> int:
+    """Convert a value to a non-negative integer with field-specific error text."""
     try:
         v = int(value)
     except (TypeError, ValueError) as exc:
@@ -90,6 +98,7 @@ def normalize_non_negative_int(value: object, name: str) -> int:
 
 
 def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
+    """Merge a partial config payload into an existing immutable game config."""
     if payload is None:
         return current
 

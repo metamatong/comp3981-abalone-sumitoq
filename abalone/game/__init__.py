@@ -21,6 +21,7 @@ __all__ = [
 
 
 def __getattr__(name):
+    """Lazily import `Game` to avoid importing CLI dependencies at package import time."""
     if name == "Game":
         from .cli import Game
 

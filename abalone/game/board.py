@@ -18,8 +18,8 @@ Board layout:
             @ @ @ @ @           a
 """
 
-from typing import Tuple, Set, List, Optional, Dict
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
 
 Position = Tuple[int, int]
 Direction = Tuple[int, int]
@@ -59,6 +59,7 @@ AXES = [
 
 
 def _build_valid_positions() -> Set[Position]:
+    """Build the canonical set of playable coordinates on the Abalone hex board."""
     positions = set()
     for r in range(9):
         if r <= 4:
@@ -74,22 +75,27 @@ VALID_POSITIONS: Set[Position] = _build_valid_positions()
 
 
 def pos_to_str(pos: Position) -> str:
+    """Convert an internal `(row, col)` position into notation like `e5`."""
     return f"{ROW_LETTERS[pos[0]]}{pos[1]}"
 
 
 def str_to_pos(s: str) -> Position:
+    """Convert notation like `e5` into an internal `(row, col)` tuple."""
     return (ROW_LETTERS.index(s[0]), int(s[1]))
 
 
 def neighbor(pos: Position, d: Direction) -> Position:
+    """Return the adjacent coordinate reached by applying direction `d` to `pos`."""
     return (pos[0] + d[0], pos[1] + d[1])
 
 
 def is_valid(pos: Position) -> bool:
+    """Return whether a coordinate is on the playable board."""
     return pos in VALID_POSITIONS
 
 
 def opposite_dir(d: Direction) -> Direction:
+    """Return the opposite direction vector for `d`."""
     return (-d[0], -d[1])
 
 
@@ -97,15 +103,19 @@ def opposite_dir(d: Direction) -> Direction:
 
 @dataclass(frozen=True)
 class Move:
+    """Immutable move payload used by both game logic and search."""
+
     marbles: Tuple[Position, ...]   # positions of marbles being moved
     direction: Direction             # movement direction
 
     @property
     def count(self) -> int:
+        """Number of marbles in this move."""
         return len(self.marbles)
 
     @property
     def is_inline(self) -> bool:
+        """Return whether movement is along the marble line (inline) vs broadside."""
         if self.count == 1:
             return True
         m0, m1 = sorted(self.marbles)[:2]
@@ -120,6 +130,7 @@ class Move:
         return s[0], s[-1]  # trailing, leading
 
     def to_notation(self, pushed=False) -> str:
+        """Return CLI/web notation for the move, optionally marking push candidates."""
         if self.is_inline:
             trailing, leading = self._leading_trailing()
             goal = neighbor(leading, self.direction)
@@ -133,6 +144,7 @@ class Move:
             return f"{self.count}:{start}-{end}>{dir_name}"
 
     def __repr__(self):
+        """Represent moves using compact Abalone notation for debugging output."""
         return self.to_notation()
 
 
@@ -178,11 +190,15 @@ LAYOUTS = {
 
 
 class Board:
+    """Mutable board state and authoritative move legality/application rules."""
+
     def __init__(self):
+        """Initialize an empty board and zeroed capture score."""
         self.cells: Dict[Position, int] = {pos: EMPTY for pos in VALID_POSITIONS}
         self.score: Dict[int, int] = {BLACK: 0, WHITE: 0}
 
     def setup_standard(self):
+        """Set marbles to the standard Abalone starting position."""
         self.clear()
         for pos in STANDARD_BLACK:
             self.cells[pos] = BLACK
@@ -201,28 +217,34 @@ class Board:
             self.cells[pos] = WHITE
 
     def clear(self):
+        """Remove all marbles and reset scores."""
         for pos in VALID_POSITIONS:
             self.cells[pos] = EMPTY
         self.score = {BLACK: 0, WHITE: 0}
 
     def copy(self) -> 'Board':
+        """Create a deep copy of board cells and score state."""
         b = Board()
         b.cells = dict(self.cells)
         b.score = dict(self.score)
         return b
 
     def get(self, pos: Position) -> Optional[int]:
+        """Return marble color at a coordinate, or `None` for unknown coordinates."""
         return self.cells.get(pos)
 
     def get_marbles(self, player: int) -> List[Position]:
+        """Return sorted coordinates for all marbles owned by `player`."""
         return sorted(pos for pos, v in self.cells.items() if v == player)
 
     def marble_count(self, player: int) -> int:
+        """Return number of marbles currently on board for `player`."""
         return sum(1 for v in self.cells.values() if v == player)
 
     # --- Move validation ---
 
     def is_legal_move(self, move: Move, player: int) -> bool:
+        """Validate move ownership, marble formation, and direction-specific constraints."""
         opponent = WHITE if player == BLACK else BLACK
 
         # All marbles must belong to the player
@@ -240,6 +262,7 @@ class Board:
             return self._check_broadside(move)
 
     def _marbles_in_line(self, marbles: Tuple[Position, ...]) -> bool:
+        """Return whether selected marbles form a contiguous straight line."""
         if len(marbles) <= 1:
             return True
         s = sorted(marbles)
@@ -253,6 +276,7 @@ class Board:
         return True
 
     def _check_inline(self, move: Move, player: int, opponent: int) -> bool:
+        """Validate an inline move, including sumito push rules."""
         d = move.direction
         _, leading = move._leading_trailing()
         ahead = neighbor(leading, d)
@@ -284,6 +308,7 @@ class Board:
         return True
 
     def _check_broadside(self, move: Move) -> bool:
+        """Validate broadside movement where every destination must be empty and valid."""
         d = move.direction
         for m in move.marbles:
             dest = neighbor(m, d)
@@ -308,6 +333,7 @@ class Board:
         return result
 
     def _apply_inline(self, move: Move, player: int, opponent: int, result: dict):
+        """Apply an inline move, including pushes and potential push-off scoring."""
         d = move.direction
         _, leading = move._leading_trailing()
 
@@ -346,6 +372,7 @@ class Board:
             self.cells[marble] = EMPTY
 
     def _apply_broadside(self, move: Move, player: int):
+        """Apply a broadside move after legality has already been established."""
         d = move.direction
         # Clear old, set new (safe because broadside dests are always empty)
         for m in move.marbles:

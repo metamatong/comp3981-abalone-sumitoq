@@ -7,6 +7,7 @@ from ..game.board import Board, Move, str_to_pos
 
 
 def build_move_from_payload(payload: Optional[Mapping]) -> Tuple[Optional[Move], Optional[str]]:
+    """Parse API payload fields into a `Move`, returning `(move, error)`."""
     if not isinstance(payload, Mapping):
         return None, "Move payload must be an object."
 
@@ -36,6 +37,7 @@ def build_move_from_payload(payload: Optional[Mapping]) -> Tuple[Optional[Move],
 
 
 def validate_move(board: Board, player: int, move: Optional[Move]) -> Tuple[bool, Optional[str]]:
+    """Check that a move exists, has valid size, and is legal for the given player."""
     if move is None:
         return False, "Move is missing."
     if not 1 <= move.count <= 3:
@@ -50,6 +52,7 @@ def validate_payload_move(
     player: int,
     payload: Optional[Mapping],
 ) -> Tuple[Optional[Move], Optional[str]]:
+    """Build and fully validate a move payload in one call."""
     move, error = build_move_from_payload(payload)
     if error:
         return None, error

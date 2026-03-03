@@ -30,6 +30,7 @@ def generate_legal_moves(board: Board, player: int) -> List[Move]:
     marble_set = set(marbles)
 
     def _add(marbles_list, direction):
+        """Insert a move candidate once, then keep only legal candidates."""
         key = (tuple(sorted(marbles_list)), direction)
         if key in seen:
             return
