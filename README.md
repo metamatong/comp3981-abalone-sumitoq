@@ -5,8 +5,11 @@ A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) b
 ## Quick Start
 
 ```bash
-# Web UI (opens browser automatically)
+# Web UI (opens browser automatically on port 8080)
 python run.py
+
+# Web UI on a custom port
+python run.py web 9090
 
 # Terminal UI
 python run.py cli
@@ -24,6 +27,8 @@ python run.py state
 python run.py state --state-depth-one --state-player black --state-child-index 0
 ```
 
+The web server automatically tries nearby ports if the requested one is busy.
+
 No external dependencies — runs on Python 3.8+ standard library only.
 
 ## How to Play
@@ -37,6 +42,17 @@ Abalone is a two-player strategy game on a hexagonal board. Each player has 14 m
 - **Broadside move**: marbles move perpendicular to their line. No pushing allowed.
 - **Sumito (push)**: you must outnumber the opponent's inline marbles to push them (2v1, 3v1, 3v2).
 - **Win condition**: first player to push 6 opponent marbles off the board.
+
+### Game-Over Conditions
+
+A game can end in four ways:
+
+| Condition | Trigger | Winner |
+|-----------|---------|--------|
+| Score | A player pushes 6 opponent marbles off | That player |
+| Timeout | Combined game clock runs out | Player with more captures (or draw) |
+| Max moves | Move limit reached (default 500) | Player with more captures (or draw) |
+| Resign | A player resigns | Opponent |
 
 ### Web UI Controls
 
@@ -76,6 +92,24 @@ Abalone is a two-player strategy game on a hexagonal board. Each player has 14 m
 
 - **trailing** = back marble (before move)
 - **goal** = where the front marble ends up (after move)
+
+## Board Layouts
+
+Three starting layouts are available, selectable via CLI or `/api/config`:
+
+| Layout | Description |
+|--------|-------------|
+| `standard` | Classic Abalone starting position (default) |
+| `belgian_daisy` | Belgian Daisy formation |
+| `german_daisy` | German Daisy formation |
+
+## Timers & Clocks
+
+The game tracks two timing systems, both configurable via `/api/config`:
+
+- **Game clock** (`game_time_ms`, default 30 min) — total shared time split equally between players. When the combined time runs out, the game ends.
+- **Per-turn time limit** (`player1_time_per_turn_s`, `player2_time_per_turn_s`, default 30s each) — if a player exceeds their turn limit, their turn is automatically skipped.
+- **Move duration** — each move in the history records `duration_ms`, the wall-clock time the player took.
 
 ## State-Space Generator
 
@@ -156,14 +190,14 @@ abalone/
     cli.py         # CLI game loop with text UI and AI turns
     main.py        # CLI entry point
     server.py      # HTTP server + JSON API
-    session.py     # shared runtime state for CLI/web
-    config.py      # mode/controller configuration
+    session.py     # shared runtime state, timers, clocks
+    config.py      # mode/layout/timer configuration
   players/
     agent.py       # choose_move(...) public interface
     minimax.py     # minimax + alpha-beta search
-    heuristics.py  # pluggable board evaluation
+    heuristics.py  # pluggable board evaluation (balanced, material presets)
     validator.py   # shared move payload + legality validation
-    types.py       # AgentConfig
+    types.py       # AgentConfig (depth, heuristic, tie_break)
   state_space.py   # generate_legal_moves()
   server.py        # compatibility shim -> game/server.py
   main.py          # compatibility shim -> game/main.py
@@ -171,6 +205,10 @@ abalone/
     index.html     # Web UI — HTML structure and layout
     style.css      # Web UI — all CSS styles
     script.js      # Web UI — all JS logic (state, rendering, API calls)
+tests/
+  test_last_move_indicator.py
+  test_players.py
+  test_session_modes.py
 run.py             # Runner: web / cli / state
 ```
 
@@ -178,10 +216,26 @@ run.py             # Runner: web / cli / state
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/state` | Current board, score, legal moves, history |
+| GET | `/api/state` | Current board, score, timers, legal moves, history |
 | POST | `/api/move` | Apply a move `{marbles: ["e5"], direction: [0,1]}` |
 | POST | `/api/agent-move` | Apply one AI move for the current AI-controlled turn |
-| POST | `/api/config` | Set mode/config `{mode, human_side, ai_depth}` |
+| POST | `/api/config` | Set config (see fields below) |
 | POST | `/api/undo` | Undo last move |
-| POST | `/api/reset` | New game |
+| POST | `/api/reset` | New game (resets board, timers, history) |
 | POST | `/api/pause` | Toggle pause/resume |
+| POST | `/api/resign` | Current player resigns; opponent wins |
+
+### `/api/config` Fields
+
+All fields are optional — send only the ones you want to change.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"hvh"` | `hvh` (human-human), `hva` (human-AI), `ava` (AI-AI) |
+| `human_side` | string/int | `"black"` | Human color in `hva` mode |
+| `ai_depth` | int | `2` | Minimax search depth (1–5) |
+| `board_layout` | string | `"standard"` | `standard`, `belgian_daisy`, or `german_daisy` |
+| `game_time_ms` | int | `1800000` | Total shared game clock in ms (0 = unlimited) |
+| `max_moves` | int | `500` | Move limit before game ends (0 = unlimited) |
+| `player1_time_per_turn_s` | int | `30` | Black's per-turn time limit in seconds |
+| `player2_time_per_turn_s` | int | `30` | White's per-turn time limit in seconds |
