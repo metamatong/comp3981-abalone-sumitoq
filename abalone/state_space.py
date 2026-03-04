@@ -23,14 +23,23 @@ POSITIVE_DIRS: List[Direction] = [(0, 1), (1, 0), (1, 1)]
 
 
 def generate_legal_moves(board: Board, player: int) -> List[Move]:
-    """Generate all unique legal moves for the given player."""
+    """Generate all unique legal moves for the given player.
+
+    :param board: Current board state to evaluate.
+    :param player: Color constant (BLACK or WHITE) whose moves to generate.
+    :return: Deduplicated list of legal Move objects.
+    """
     moves: List[Move] = []
     seen: Set[Tuple[Tuple[Position, ...], Direction]] = set()
     marbles = board.get_marbles(player)
     marble_set = set(marbles)
 
     def _add(marbles_list, direction):
-        """Insert a move candidate once, then keep only legal candidates."""
+        """Insert a move candidate once, then keep only legal candidates.
+
+        :param marbles_list: List of (row, col) positions for the marbles in the move.
+        :param direction: (dr, dc) direction tuple for the move.
+        """
         key = (tuple(sorted(marbles_list)), direction)
         if key in seen:
             return
@@ -66,8 +75,12 @@ def generate_legal_moves(board: Board, player: int) -> List[Move]:
 
 
 def categorize_moves(moves: List[Move]) -> dict:
-    """Categorize moves by type for display/analysis."""
-    cats = {
+    """Categorize moves by type for display/analysis.
+
+    :param moves: List of Move objects to categorize.
+    :return: Dict mapping category names to lists of moves.
+    """
+    categories = {
         "single_inline": [],
         "double_inline": [],
         "double_broadside": [],
@@ -79,34 +92,38 @@ def categorize_moves(moves: List[Move]) -> dict:
         count = move.count
         inline = move.is_inline
         if count == 1:
-            cats["single_inline"].append(move)
+            categories["single_inline"].append(move)
         elif count == 2:
-            cats["double_inline" if inline else "double_broadside"].append(move)
+            categories["double_inline" if inline else "double_broadside"].append(move)
         else:
-            cats["triple_inline" if inline else "triple_broadside"].append(move)
+            categories["triple_inline" if inline else "triple_broadside"].append(move)
 
-    return cats
+    return categories
 
 
 def print_state_space_summary(board: Board, player: int):
-    """Print a summary of legal move space for the given player."""
+    """Print a summary of legal move space for the given player.
+
+    :param board: Current board state to analyze.
+    :param player: Color constant (BLACK or WHITE) whose moves to summarize.
+    """
     pname = "Black" if player == BLACK else "White"
     marbles = board.get_marbles(player)
 
-    legal = generate_legal_moves(board, player)
-    cats = categorize_moves(legal)
+    legal_moves = generate_legal_moves(board, player)
+    categories = categorize_moves(legal_moves)
 
     print(f"\n=== State Space for {pname} ({len(marbles)} marbles) ===")
-    print(f"  Legal moves (unique): {len(legal)}")
+    print(f"  Legal moves (unique): {len(legal_moves)}")
     print()
     print("  Breakdown:")
-    for cat_name, cat_moves in cats.items():
-        label = cat_name.replace("_", " ").title()
+    for category_name, cat_moves in categories.items():
+        label = category_name.replace("_", " ").title()
         print(f"    {label:25s}: {len(cat_moves)}")
 
     # Show push moves
     push_moves = []
-    for move in legal:
+    for move in legal_moves:
         if move.is_inline and move.count > 1:
             direction = move.direction
             _, leading = move._leading_trailing()
