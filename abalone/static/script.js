@@ -201,14 +201,36 @@ function toggleSelect(ps) {
 
     /* Toggle own marble */
     const idx = selected.indexOf(ps);
-    if (idx >= 0) { selected.splice(idx, 1); }
-    else {
-        if (selected.length >= 3) return;
-        selected.push(ps);
-        if (selected.length > 1 && !isLine(selected)) selected.pop();
+    if (idx >= 0) {
+        selected.splice(idx, 1);
+        render();
+        return;
     }
+
+    /* If already 3 selected, start a new selection with this marble */
+    if (selected.length >= 3) {
+        selected = [ps];
+        render();
+        return;
+    }
+
+    /* If user clicks a non-adjacent marble, clear selection and start new */
+    if (selected.length > 0 && !isAdjacentToAny(ps, selected)) {
+        selected = [ps];
+        render();
+        return;
+    }
+    /* Otherwise, try adding it */
+    selected.push(ps);
+
+    /* Keep your existing line constraint */
+    if (selected.length > 1 && !isLine(selected)) {
+        // If it breaks line, revert to a fresh selection on the clicked marble
+        selected = [ps];
+    }
+
     render();
-}
+    }
 
 function isLine(sel) {
     if (sel.length <= 1) return true;
@@ -219,6 +241,18 @@ function isLine(sel) {
         if (pts[i][0] !== pts[0][0] + i * d[0] || pts[i][1] !== pts[0][1] + i * d[1]) return false;
     }
     return true;
+}
+
+function areAdjacent(a, b) {
+    const [ar, ac] = parsePos(a);
+    const [br, bc] = parsePos(b);
+    const dr = br - ar;
+    const dc = bc - ac;
+    return DIRECTIONS.some(([rr, cc]) => rr === dr && cc === dc);
+}
+
+function isAdjacentToAny(ps, sel) {
+    return sel.some(s => areAdjacent(ps, s));
 }
 
 /* ── Destination map ───────────────────────────────────── */
