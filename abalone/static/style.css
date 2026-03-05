@@ -363,6 +363,11 @@ svg#board {
   display: block
 }
 
+svg#board text {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* ── End Banner ──────────────────────────────────────────── */
 #end-banner {
   display: none;
