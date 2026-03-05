@@ -28,6 +28,16 @@ from .board import (
 POSITIVE_DIRS: List[Direction] = [(0, 1), (1, 0), (1, 1)]
 INITIAL_MARBLES_PER_PLAYER = 14
 
+# Direction order used by the reference implementation for move enumeration.
+REFERENCE_DIRECTIONS: List[Direction] = [
+    (1, 1),    # NE
+    (0, 1),    # E
+    (-1, 0),   # SE
+    (-1, -1),  # SW
+    (0, -1),   # W
+    (1, 0),    # NW
+]
+
 
 @dataclass(frozen=True)
 class PositionListComparison:
@@ -47,6 +57,11 @@ class PositionListComparison:
 
 def generate_legal_moves(board: Board, player: int) -> List[Move]:
     """Generate all unique legal moves for the given player.
+
+    Moves are enumerated using trailing-marble-based iteration: each marble
+    is treated as the rearmost (trailing) marble and inline groups of 1, 2,
+    and 3 marbles are extended forward in the move direction.  The direction
+    order follows the reference implementation (NE, E, SE, SW, W, NW).
 
     :param board: Current board state to evaluate.
     :param player: Color constant (BLACK or WHITE) whose moves to generate.
@@ -72,27 +87,39 @@ def generate_legal_moves(board: Board, player: int) -> List[Move]:
         if board.is_legal_move(move, player):
             moves.append(move)
 
+    # --- Pass 1: inline moves (trailing-marble enumeration) ---
+    # This determines the canonical ordering for inline moves.
     for marble in marbles:
-        # 1-stone moves
-        for direction in DIRECTIONS:
+        for direction in REFERENCE_DIRECTIONS:
+            # 1-stone move
             _add([marble], direction)
 
-        # 2-stone moves
+            # 2-stone inline: extend forward from trailing marble
+            fwd1 = neighbor(marble, direction)
+            if fwd1 in marble_set:
+                _add([marble, fwd1], direction)
+
+                # 3-stone inline: extend one more step forward
+                fwd2 = neighbor(fwd1, direction)
+                if fwd2 in marble_set:
+                    _add([marble, fwd1, fwd2], direction)
+
+    # --- Pass 2: broadside moves ---
+    # Find pairs/triples along each line axis and try all directions.
+    # The ``seen`` set ensures inline moves from pass 1 are not duplicated.
+    for marble in marbles:
         for line_dir in POSITIVE_DIRS:
             second = neighbor(marble, line_dir)
             if second in marble_set:
                 pair = [marble, second]
-                for direction in DIRECTIONS:
+                for direction in REFERENCE_DIRECTIONS:
                     _add(pair, direction)
 
-        # 3-stone moves
-        for line_dir in POSITIVE_DIRS:
-            second = neighbor(marble, line_dir)
-            third = neighbor(second, line_dir)
-            if second in marble_set and third in marble_set:
-                triple = [marble, second, third]
-                for direction in DIRECTIONS:
-                    _add(triple, direction)
+                third = neighbor(second, line_dir)
+                if third in marble_set:
+                    triple = [marble, second, third]
+                    for direction in REFERENCE_DIRECTIONS:
+                        _add(triple, direction)
 
     return moves
 

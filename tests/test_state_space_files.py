@@ -113,9 +113,9 @@ class StateSpaceFileTests(unittest.TestCase):
             self.assertEqual(resolved_expected, expected_path)
             self.assertEqual(comparison.actual_lines, 32)
             self.assertEqual(comparison.expected_lines, 32)
-            self.assertFalse(comparison.exact_match)
+            self.assertTrue(comparison.exact_match)
             self.assertTrue(comparison.same_set)
-            self.assertEqual(comparison.first_mismatch_line, 4)
+            self.assertEqual(comparison.mismatch_count, 0)
 
     def test_state_verify_prints_exact_match_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -143,9 +143,9 @@ class StateSpaceFileTests(unittest.TestCase):
             output = stdout.getvalue()
             generated_path = output_dir / "Test1.generated.board"
             self.assertTrue(generated_path.exists())
-            self.assertIn("exact_match=False", output)
+            self.assertIn("exact_match=True", output)
             self.assertIn("same_set=True", output)
-            self.assertIn("first_mismatch_line=4", output)
+            self.assertIn("mismatch_count=0", output)
             self.assertIn(f"generated={generated_path}", output)
 
     def test_compare_and_save_position_list_files_writes_generated_sibling(self):
@@ -165,7 +165,7 @@ class StateSpaceFileTests(unittest.TestCase):
             self.assertEqual(resolved_expected, expected_path)
             self.assertEqual(generated_path, output_dir / "Test1.generated.board")
             self.assertTrue(generated_path.exists())
-            self.assertFalse(comparison.exact_match)
+            self.assertTrue(comparison.exact_match)
 
 
 if __name__ == "__main__":
