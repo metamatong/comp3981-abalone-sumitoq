@@ -4,7 +4,14 @@
 import argparse
 from typing import List, Optional
 
-from ..state_space import generate_legal_moves, print_state_space_summary
+from ..state_space import (
+    compare_and_save_position_list_files,
+    compare_position_list_files,
+    export_position_list_states,
+    format_position_list_comparison,
+    generate_legal_moves,
+    print_state_space_summary,
+)
 from .board import BLACK, WHITE, Board
 from .cli import Game
 from .config import MODE_AVA, MODE_HVA, MODE_HVH
@@ -57,6 +64,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Play Abalone in the terminal.")
     parser.add_argument("--state-space", action="store_true", help="Print state-space analysis and exit.")
     parser.add_argument(
+        "--state-input-file",
+        help="Path to a compact input file (`b|w` + comma-separated `C5b` tokens) to expand one ply.",
+    )
+    parser.add_argument(
+        "--state-output-file",
+        help="Optional output path for one-ply child states generated from --state-input-file.",
+    )
+    parser.add_argument(
+        "--state-verify",
+        action="store_true",
+        help="Compare generated child states against an expected `.board` file.",
+    )
+    parser.add_argument(
+        "--state-expected-file",
+        help=(
+            "Expected `.board` path used with --state-verify. "
+            "If omitted, infer `state_space_outputs/<name>.board` from the input path."
+        ),
+    )
+    parser.add_argument(
         "--state-depth-one",
         action="store_true",
         help="With --state-space, print root state plus one depth-1 child state.",
@@ -100,6 +127,48 @@ def main(argv: Optional[List[str]] = None):
     args = parser.parse_args(argv)
 
     if args.state_space:
+        if args.state_output_file and not args.state_input_file:
+            parser.error("--state-output-file requires --state-input-file")
+        if args.state_expected_file and not args.state_input_file:
+            parser.error("--state-expected-file requires --state-input-file")
+        if args.state_verify and not args.state_input_file:
+            parser.error("--state-verify requires --state-input-file")
+        if args.state_input_file and args.state_depth_one:
+            parser.error("--state-input-file cannot be combined with --state-depth-one")
+        if args.state_verify and args.state_output_file:
+            parser.error("--state-verify cannot be combined with --state-output-file")
+        if args.state_input_file:
+            try:
+                if args.state_verify or args.state_expected_file:
+                    if args.state_verify:
+                        comparison, expected_path, generated_path = compare_and_save_position_list_files(
+                            input_path=args.state_input_file,
+                            expected_path=args.state_expected_file,
+                        )
+                    else:
+                        comparison, expected_path = compare_position_list_files(
+                            input_path=args.state_input_file,
+                            expected_path=args.state_expected_file,
+                        )
+                        generated_path = None
+                    print(
+                        format_position_list_comparison(
+                            comparison,
+                            input_path=args.state_input_file,
+                            expected_path=str(expected_path),
+                            generated_path=str(generated_path) if generated_path is not None else None,
+                        )
+                    )
+                    return
+                count = export_position_list_states(
+                    input_path=args.state_input_file,
+                    output_path=args.state_output_file,
+                )
+            except (OSError, ValueError) as exc:
+                parser.error(str(exc))
+            if args.state_output_file:
+                print(f"Wrote {count} states to {args.state_output_file}")
+            return
         if args.state_child_index < 0:
             parser.error("--state-child-index must be >= 0")
         _print_state_space(

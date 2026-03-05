@@ -25,6 +25,12 @@ python run.py state
 
 # State-space: root + exactly one depth-1 child (selected by legal move index)
 python run.py state --state-depth-one --state-player black --state-child-index 0
+
+# State-space: expand one custom input file and save all next states
+python run.py state --state-input-file Test1.input --state-output-file Test1.board
+
+# State-space: verify generated child states against expected output
+python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
 ```
 
 The web server automatically tries nearby ports if the requested one is busy.
@@ -124,6 +130,18 @@ For building AI / search algorithms. This module returns only legal, deduplicate
     - root state summary for the selected root player,
     - one depth-1 child after applying legal move index `N`.
   - Re-run with different `N` to inspect different children.
+- `python run.py state --state-input-file PATH --state-output-file PATH`
+  - Reads a compact custom position file:
+    - first non-empty line: `b` or `w` for side to move
+    - remaining comma-separated tokens: `C5b,D5b,...`
+  - Expands all legal one-move child states from that position.
+  - Writes one output line per child board using the same compact token format.
+- `python run.py state --state-input-file PATH --state-verify`
+  - Generates all depth-1 child states from the input file.
+  - Compares them line-by-line against the expected `.board` file.
+  - If `PATH` is inside `state_space_inputs/`, the expected file defaults to the matching
+    `state_space_outputs/<same-name>.board`.
+  - Use `--state-expected-file PATH` to compare against a specific expected file instead.
 
 ### Usage
 

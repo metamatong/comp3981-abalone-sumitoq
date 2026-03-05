@@ -5,6 +5,10 @@ Run the Abalone game.
   python run.py          → web UI at http://localhost:8080
   python run.py cli      → terminal UI
   python run.py state    → state-space analysis
+  python run.py state --state-input-file foo.input --state-output-file foo.board
+                         → expand one input board file to all next legal states
+  python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
+                         → compare generated child states against expected output
 """
 import sys
 
