@@ -4,10 +4,12 @@
 import argparse
 from typing import List, Optional
 
-from ..state_space import (
+from ..file_handler import (
     compare_and_save_position_list_files,
     compare_position_list_files,
     export_position_list_states,
+)
+from ..state_space import (
     format_position_list_comparison,
     generate_legal_moves,
     print_state_space_summary,

@@ -6,9 +6,11 @@ from pathlib import Path
 
 from abalone.game.main import main
 from abalone.game.board import BLACK, WHITE
-from abalone.state_space import (
+from abalone.file_handler import (
     compare_and_save_position_list_files,
     compare_position_list_files,
+)
+from abalone.state_space import (
     dump_position_list_state,
     generate_next_states,
     load_position_list_state,
