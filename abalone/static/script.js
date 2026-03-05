@@ -255,10 +255,38 @@ function isAdjacentToAny(ps, sel) {
     return sel.some(s => areAdjacent(ps, s));
 }
 
+/*
+ * Exclude ambiguous destination tiles.
+ * If multiple legal moves map to the same destination tile, that tile is
+ * removed because the destination alone does not uniquely determine the
+ * intended move.
+ */
 /* ── Destination map ───────────────────────────────────── */
 function getValidDestinations() {
     if (!selected.length || !state) return {};
+
     const dests = {};
+    const ambiguous = new Set();
+
+    function moveKey(lm) {
+        return `${lm.is_inline ? 1 : 0}:${lm.direction[0]},${lm.direction[1]}:${lm.marbles.join(',')}`;
+    }
+
+    function addDest(d, lm) {
+        if (ambiguous.has(d)) return;
+
+        if (!(d in dests)) {
+            dests[d] = lm;
+            return;
+        }
+
+        // A different move maps to the same destination tile => ambiguous, disable it
+        if (moveKey(dests[d]) !== moveKey(lm)) {
+            delete dests[d];
+            ambiguous.add(d);
+        }
+    }
+
     for (const lm of state.legal_moves) {
         const mset = new Set(lm.marbles);
         if (mset.size !== selected.length) continue;
@@ -266,16 +294,17 @@ function getValidDestinations() {
 
         const [dr, dc] = lm.direction;
 
-        /* For broadside: every destination cell that is NOT already in the group */
+        /* Broadside: destination cells that are NOT already in the group */
         const destCells = lm.marbles.map(m => {
             const [r, c] = parsePos(m);
             return posKey(r + dr, c + dc);
         });
+
         for (const d of destCells) {
-            if (!mset.has(d)) dests[d] = lm;
+            if (!mset.has(d)) addDest(d, lm);
         }
 
-        /* For inline: also mark the goal cell (where leading marble ends up) */
+        /* Inline: also mark the goal cell (where leading marble ends up) */
         if (lm.is_inline) {
             let best = lm.marbles[0], bestDot = -Infinity;
             for (const m of lm.marbles) {
@@ -284,9 +313,10 @@ function getValidDestinations() {
                 if (dot > bestDot) { bestDot = dot; best = m; }
             }
             const [lr, lc] = parsePos(best);
-            dests[posKey(lr + dr, lc + dc)] = lm;
+            addDest(posKey(lr + dr, lc + dc), lm);
         }
     }
+
     return dests;
 }
 
