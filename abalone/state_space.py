@@ -207,10 +207,34 @@ def generate_next_state_strings(board: Board, player: int) -> List[str]:
     return [dump_position_list_state(child) for child in generate_next_states(board, player)]
 
 
+def generate_move_notation_strings(board: Board, player: int) -> List[str]:
+    """Generate move notation strings for every legal move (same order as generate_next_states).
+
+    Sumito (push) moves are marked with a trailing ``*`` via ``to_notation(pushed=True)``.
+    """
+    opponent = WHITE if player == BLACK else BLACK
+    notations: List[str] = []
+    for move in generate_legal_moves(board, player):
+        pushed = False
+        if move.is_inline and move.count > 1:
+            _, leading = move._leading_trailing()
+            ahead = neighbor(leading, move.direction)
+            if is_valid(ahead) and board.cells.get(ahead) == opponent:
+                pushed = True
+        notations.append(move.to_notation(pushed=pushed))
+    return notations
+
+
 def expand_position_list_text(text: str) -> List[str]:
     """Expand a compact position-list input text block into serialized child states."""
     board, player = load_position_list_state(text)
     return generate_next_state_strings(board, player)
+
+
+def expand_position_list_moves(text: str) -> List[str]:
+    """Expand a compact position-list input text block into move notation strings."""
+    board, player = load_position_list_state(text)
+    return generate_move_notation_strings(board, player)
 
 
 def compare_position_list_lines(actual: List[str], expected: List[str]) -> PositionListComparison:

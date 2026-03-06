@@ -7,6 +7,7 @@ Run the Abalone game.
   python run.py state    → state-space analysis
   python run.py state --state-input-file foo.input --state-output-file foo.board
                          → expand one input board file to all next legal states
+                           produces foo.board (board states) and foo.move (move notations)
   python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
                          → compare generated child states against expected output
 """

@@ -2,6 +2,8 @@
 
 A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI and a state-space generator for building AI players.
 
+## Chi En see line 126 for output file generation
+
 ## Quick Start
 
 ```bash
@@ -121,27 +123,89 @@ The game tracks two timing systems, both configurable via `/api/config`:
 
 For building AI / search algorithms. This module returns only legal, deduplicated moves.
 
-### CLI State-Space Modes
+### Generating Output Files from an Input File
 
-- `python run.py state`
-  - Prints legal state-space summaries for both players on the initial board.
-- `python run.py state --state-depth-one --state-player black --state-child-index N`
-  - Prints exactly two nodes:
-    - root state summary for the selected root player,
-    - one depth-1 child after applying legal move index `N`.
-  - Re-run with different `N` to inspect different children.
-- `python run.py state --state-input-file PATH --state-output-file PATH`
-  - Reads a compact custom position file:
-    - first non-empty line: `b` or `w` for side to move
-    - remaining comma-separated tokens: `C5b,D5b,...`
-  - Expands all legal one-move child states from that position.
-  - Writes one output line per child board using the same compact token format.
-- `python run.py state --state-input-file PATH --state-verify`
-  - Generates all depth-1 child states from the input file.
-  - Compares them line-by-line against the expected `.board` file.
-  - If `PATH` is inside `state_space_inputs/`, the expected file defaults to the matching
-    `state_space_outputs/<same-name>.board`.
-  - Use `--state-expected-file PATH` to compare against a specific expected file instead.
+Given a `.input` file describing a board position, you can generate **two** output files:
+
+| File | Extension | Contents |
+|------|-----------|----------|
+| Board states | `.board` | One line per legal move — the resulting board state in compact token format |
+| Move notations | `.move` | One line per legal move — the move notation (e.g. `1:c5c6`, `3:d5g8`) |
+
+Both files have the same number of lines in the same order — line *N* of the `.move` file is the move that produces line *N* of the `.board` file.
+
+## Before running the tests, ensure the input files are pasted 
+## into the directory abalone/state_space_inputs/
+
+**To generate both files, run:**
+
+```bash
+python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-output-file abalone/state_space_outputs/Test1.board
+```
+
+This produces:
+- `abalone/state_space_outputs/Test1.board` — resulting board states
+- `abalone/state_space_outputs/Test1.move` — move notations
+
+**To generate from Test2:**
+
+```bash
+python run.py state --state-input-file abalone/state_space_inputs/Test2.input --state-output-file abalone/state_space_outputs/Test2.board
+```
+
+You can also point at any custom input/output paths:
+
+```bash
+python run.py state --state-input-file my_board.input --state-output-file my_board.board
+```
+
+The `.move` file is always created alongside the `.board` file automatically (same directory, same stem, `.move` extension).
+
+### Input File Format
+
+Each `.input` file has two parts:
+
+1. **Line 1**: `b` or `w` — which player moves next
+2. **Line 2+**: comma-separated marble tokens like `C5b,D5b,E7w,...`
+   - Each token is `<Col><Row><color>` where color is `b` (black) or `w` (white)
+
+Example (`Test1.input`):
+
+```
+b
+C5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w
+```
+
+### Output File Formats
+
+**`.board` file** — each line is a resulting board state:
+```
+C6b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w
+B5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w
+...
+```
+
+**`.move` file** — each line is a move notation:
+```
+1:c5c6
+1:c5b5
+1:c5b4
+3:d5g8
+...
+```
+
+### Other State-Space CLI Modes
+
+```bash
+# Print legal move summary for both players on the standard starting board
+python run.py state
+
+# Show root summary + one depth-1 child (by legal move index)
+python run.py state --state-depth-one --state-player black --state-child-index 0
+
+# Verify generated board states against an expected .board file
+python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
+```
 
 ### Usage
 

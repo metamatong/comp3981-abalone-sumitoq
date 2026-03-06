@@ -162,14 +162,24 @@ def main(argv: Optional[List[str]] = None):
                         )
                     )
                     return
+                move_out = None
+                if args.state_output_file:
+                    # Derive .move path next to the .board output
+                    out = args.state_output_file
+                    if out.endswith(".board"):
+                        move_out = out[: -len(".board")] + ".move"
+                    else:
+                        move_out = out + ".move"
                 count = export_position_list_states(
                     input_path=args.state_input_file,
                     output_path=args.state_output_file,
+                    move_output_path=move_out,
                 )
             except (OSError, ValueError) as exc:
                 parser.error(str(exc))
             if args.state_output_file:
                 print(f"Wrote {count} states to {args.state_output_file}")
+                print(f"Wrote {count} moves  to {move_out}")
             return
         if args.state_child_index < 0:
             parser.error("--state-child-index must be >= 0")

@@ -10,22 +10,53 @@ from typing import List, Optional, Tuple
 from .state_space import (
     PositionListComparison,
     compare_position_list_lines,
+    expand_position_list_moves,
     expand_position_list_text,
 )
 
 
-def export_position_list_states(input_path: str, output_path: Optional[str] = None) -> int:
-    """Expand one compact state file and optionally write the serialized child states.
+def export_position_list_states(
+    input_path: str,
+    output_path: Optional[str] = None,
+    move_output_path: Optional[str] = None,
+) -> int:
+    """Expand one compact state file and write child states and/or move notations.
 
-    :return: Number of child states generated.
+    When *output_path* is given a `.board` file is written with serialized child
+    board states.  When *move_output_path* is given a `.move` file is written
+    with the ``to_notation()`` representation of each legal move.  If neither
+    path is supplied the board states are printed to stdout.
+
+    :return: Number of child states (== moves) generated.
     """
-    child_states = expand_position_list_text(Path(input_path).read_text(encoding="utf-8"))
+    text = Path(input_path).read_text(encoding="utf-8")
+    child_states = expand_position_list_text(text)
+    move_notations = expand_position_list_moves(text)
+
     if output_path:
         write_position_list_lines(child_states, output_path)
-    else:
+    if move_output_path:
+        write_position_list_lines(move_notations, move_output_path)
+    if not output_path and not move_output_path:
         print("\n".join(child_states))
 
     return len(child_states)
+
+
+def default_board_output_path(input_path: str) -> Path:
+    """Derive the default `.board` output path from an input file path."""
+    source = Path(input_path)
+    output_dir = source.parent.parent / "state_space_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / f"{source.stem}.board"
+
+
+def default_move_output_path(input_path: str) -> Path:
+    """Derive the default `.move` output path from an input file path."""
+    source = Path(input_path)
+    output_dir = source.parent.parent / "state_space_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / f"{source.stem}.move"
 
 
 def expected_output_path_for_input(input_path: str) -> Path:
