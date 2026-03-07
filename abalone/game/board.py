@@ -122,7 +122,7 @@ class Move:
         line_dir = (m1[0] - m0[0], m1[1] - m0[1])
         return self.direction == line_dir or self.direction == opposite_dir(line_dir)
 
-    def _leading_trailing(self):
+    def leading_trailing(self):
         """Return (trailing, leading) marble based on movement direction."""
         d = self.direction
         s = sorted(self.marbles,
@@ -132,7 +132,7 @@ class Move:
     def to_notation(self, pushed=False) -> str:
         """Return CLI/web notation for the move, optionally marking push candidates."""
         if self.is_inline:
-            trailing, leading = self._leading_trailing()
+            trailing, leading = self.leading_trailing()
             goal = neighbor(leading, self.direction)
             push_str = "*" if pushed else ""
             return f"{self.count}:{pos_to_str(trailing)}{pos_to_str(goal)}{push_str}"
@@ -278,7 +278,7 @@ class Board:
     def _check_inline(self, move: Move, player: int, opponent: int) -> bool:
         """Validate an inline move, including sumito push rules."""
         d = move.direction
-        _, leading = move._leading_trailing()
+        _, leading = move.leading_trailing()
         ahead = neighbor(leading, d)
 
         if not is_valid(ahead):
@@ -335,7 +335,7 @@ class Board:
     def _apply_inline(self, move: Move, player: int, opponent: int, result: dict):
         """Apply an inline move, including pushes and potential push-off scoring."""
         d = move.direction
-        _, leading = move._leading_trailing()
+        _, leading = move.leading_trailing()
 
         # Find pushed opponent marbles
         pushed = []

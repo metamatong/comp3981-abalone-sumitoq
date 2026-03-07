@@ -52,7 +52,7 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
     if not move.is_inline or move.count < 2:
         return False
 
-    _, leading = move._leading_trailing()
+    _, leading = move.leading_trailing()
     ahead = neighbor(leading, move.direction)
     opponent = _opponent(player)
     return is_valid(ahead) and board.cells.get(ahead) == opponent

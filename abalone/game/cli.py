@@ -247,7 +247,7 @@ class Game:
         if not move.is_inline or move.count < 2:
             return False
 
-        _, leading = move._leading_trailing()
+        _, leading = move.leading_trailing()
         ahead = neighbor(leading, move.direction)
         opponent = WHITE if self.current_player == BLACK else BLACK
         return is_valid(ahead) and self.board.cells.get(ahead) == opponent

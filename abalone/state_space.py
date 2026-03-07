@@ -217,7 +217,7 @@ def generate_move_notation_strings(board: Board, player: int) -> List[str]:
     for move in generate_legal_moves(board, player):
         pushed = False
         if move.is_inline and move.count > 1:
-            _, leading = move._leading_trailing()
+            _, leading = move.leading_trailing()
             ahead = neighbor(leading, move.direction)
             if is_valid(ahead) and board.cells.get(ahead) == opponent:
                 pushed = True
@@ -354,7 +354,7 @@ def print_state_space_summary(board: Board, player: int):
     for move in legal_moves:
         if move.is_inline and move.count > 1:
             direction = move.direction
-            _, leading = move._leading_trailing()
+            _, leading = move.leading_trailing()
             ahead = neighbor(leading, direction)
             opponent = WHITE if player == BLACK else BLACK
             if is_valid(ahead) and board.cells.get(ahead) == opponent:
