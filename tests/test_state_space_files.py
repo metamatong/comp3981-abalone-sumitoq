@@ -169,6 +169,52 @@ class StateSpaceFileTests(unittest.TestCase):
             self.assertTrue(generated_path.exists())
             self.assertTrue(comparison.exact_match)
 
+    # Verify that a single marble placed in the center of the board
+    # produces six legal next states (one for each possible direction).
+    def test_single_center_marble_has_six_next_states(self):
+        sample_input = """b
+    E5b
+    """
+        board, player = load_position_list_state(sample_input)
+        actual = generate_next_states(board, player)
+
+        self.assertEqual(player, BLACK)
+        self.assertEqual(len(actual), 6)
+
+
+    # Verify that the exact board states generated from a single
+    # center marble match the expected neighboring positions.
+    def test_single_center_marble_generates_expected_states(self):
+        sample_input = """b
+    E5b
+    """
+        expected = {
+            "D4b",
+            "D5b",
+            "E4b",
+            "E6b",
+            "F5b",
+            "F6b",
+        }
+
+        board, player = load_position_list_state(sample_input)
+        actual = {dump_position_list_state(child) for child in generate_next_states(board, player)}
+
+        self.assertEqual(actual, expected)
+
+
+    # Verify that a marble placed on a board corner has fewer legal moves
+    # due to board boundaries limiting available directions.
+    def test_single_corner_marble_has_fewer_legal_moves(self):
+        sample_input = """b
+    A1b
+    """
+        board, player = load_position_list_state(sample_input)
+        actual = generate_next_states(board, player)
+
+        self.assertEqual(player, BLACK)
+        self.assertEqual(len(actual), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
