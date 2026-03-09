@@ -2,7 +2,7 @@
 
 A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI and a state-space generator for building AI players.
 
-## Chi En see line 126 ("Generating Output Files from an Input File" section) for output file generation
+## Chi En please refer to "State-Space Generator" section for output file generation
 
 ## Quick Start
 
