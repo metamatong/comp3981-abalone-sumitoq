@@ -19,7 +19,19 @@ WEIGHTS = {
     "threat": 80.0,
     "mobility": 20.0,
     "stability": 25.0,
-    # "aggression": 40.0
+}
+
+WEIGHTS_GRANDMASTER_GUS = {
+    "marble": 1000.0,
+    "center": 2000.0,
+    "cohesion": 300.0,
+    "cluster": 0,
+    "edge": 500.0,
+    "formation": 0,
+    "push": 500.0,
+    "threat": 0,
+    "mobility": 0,
+    "stability": 0,
 }
 
 
@@ -228,21 +240,6 @@ def stability(board: Board, player: int) -> float:
     return float(stable(player) - stable(opp))
 
 
-# def aggressive_moves(board: Board, player: int, player_moves: List[Move]) -> float:
-#     """Score immediate push threats (captures handled implicitly by search tree)."""
-#     score = 0
-#     opponent = _opponent(player)
-
-#     for m in player_moves:
-#         if m.is_inline and m.count > 1:
-#             _, leading = m.leading_trailing()
-#             ahead = neighbor(leading, m.direction)
-#             if is_valid(ahead) and board.cells.get(ahead) == opponent:
-#                 score += 3
-                
-#     return float(score)
-
-
 def evaluate_board(board: Board, player: int) -> float:
     """Full heuristic evaluation."""
     opp = _opponent(player)
@@ -262,5 +259,4 @@ def evaluate_board(board: Board, player: int) -> float:
         + WEIGHTS["threat"] * threat_pressure(board, player)
         + WEIGHTS["mobility"] * mobility(player_moves, opp_moves)
         + WEIGHTS["stability"] * stability(board, player)
-        # + WEIGHTS["aggression"] * aggressive_moves(board, player, player_moves)
     )
