@@ -94,11 +94,11 @@ def _minimax(
     stats["nodes"] += 1
 
     if depth == 0 or _is_terminal(board):
-        return evaluate_board(board, root_player, preset=config.heuristic), None
+        return evaluate_board(board, root_player), None
 
     legal_moves = generate_legal_moves(board, to_move)
     if not legal_moves:
-        return evaluate_board(board, root_player, preset=config.heuristic), None
+        return evaluate_board(board, root_player), None
 
     legal_moves = _ordered_moves(board, to_move, legal_moves)
     maximizing = (to_move == root_player)
