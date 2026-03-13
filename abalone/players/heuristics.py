@@ -9,16 +9,16 @@ CENTER = (4, 5)
 
 # Weights for the full heuristic
 WEIGHTS = {
-    "marble": 50000.0,
-    "center": 40.0,
-    "cohesion": 35.0,
-    "cluster": 30.0,
-    "edge": 60.0,
-    "formation": 50.0,
-    "push": 120.0,
-    "threat": 80.0,
-    "mobility": 20.0,
-    "stability": 25.0,
+    "marble": 50000.0,   # marble count advantage (dominant term; losing a marble is catastrophic)
+    "center": 40.0,      # proximity of own marbles to board center (lower squared distance = better)
+    "cohesion": 35.0,    # total friendly adjacency count (tight groups are harder to push off)
+    "cluster": 30.0,     # size of largest connected friendly group (encourages staying together)
+    "edge": 60.0,        # penalizes own marbles near the board edge (high push-off risk)
+    "formation": 50.0,   # inline 2- and 3-marble formations (prerequisite for push moves)
+    "push": 120.0,       # estimated push opportunities against opponent (most actionable threat)
+    "threat": 80.0,      # opponent marbles near edges under friendly pressure (imminent capture)
+    "mobility": 20.0,    # difference in legal move count (more options = better flexibility)
+    "stability": 25.0,   # marbles with ≥2 friendly neighbors (well-supported, harder to isolate)
     # "aggression": 40.0
 }
 
