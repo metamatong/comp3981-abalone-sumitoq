@@ -1,12 +1,17 @@
-"""Types used by bot players."""
+"""Compatibility shim for shared AI type definitions."""
 
-from dataclasses import dataclass
+from ..ai.types import (
+    AgentConfig,
+    AgentDefinition,
+    Evaluator,
+    ResolvedAgentConfig,
+    resolve_agent_config,
+)
 
-
-@dataclass(frozen=True)
-class AgentConfig:
-    """Search options for local minimax-based AI players."""
-
-    depth: int = 5
-    heuristic: str = "balanced"
-    tie_break: str = "lexicographic"
+__all__ = [
+    "AgentConfig",
+    "AgentDefinition",
+    "Evaluator",
+    "ResolvedAgentConfig",
+    "resolve_agent_config",
+]

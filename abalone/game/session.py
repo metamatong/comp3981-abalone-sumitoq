@@ -4,8 +4,9 @@ import time
 from collections.abc import Mapping
 from typing import Dict, List, Optional, Set
 
-from ..players.agent import choose_move_with_info
-from ..players.types import AgentConfig
+from ..ai.agent import choose_move_with_info
+from ..ai.types import AgentConfig
+from ..players.registry import get_agent, list_agent_metadata
 from ..players.validator import validate_move, validate_payload_move
 from ..state_space import generate_legal_moves
 from .board import BLACK, WHITE, Board, is_valid, neighbor, pos_to_str, str_to_pos
@@ -15,10 +16,16 @@ from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 class GameSession:
     """Own the mutable game runtime state shared by CLI and HTTP layers."""
 
-    def __init__(self, config: Optional[GameConfig] = None, initial_time_ms: int = 10 * 60 * 1000):
+    def __init__(
+        self,
+        config: Optional[GameConfig] = None,
+        initial_time_ms: int = 10 * 60 * 1000,
+        opening_seed: Optional[int] = None,
+    ):
         """Initialize session state, timers, and a standard starting board."""
         self.initial_time_ms = initial_time_ms
         self.config = config or GameConfig()
+        self.opening_seed = opening_seed
 
         self.board = Board()
         self.current_player = BLACK
@@ -45,6 +52,10 @@ class GameSession:
     def current_controller(self) -> str:
         """Return controller type for the side currently on turn."""
         return self.controllers[self.current_player]
+
+    def ai_id_for_player(self, player: int) -> str:
+        """Return the configured AI preset ID for a player color."""
+        return self.config.black_ai_id if player == BLACK else self.config.white_ai_id
 
     def _now_ms(self) -> int:
         """Return current wall-clock time in milliseconds."""
@@ -176,12 +187,15 @@ class GameSession:
                 "mode": self.config.mode,
                 "human_side": self.config.human_side,
                 "ai_depth": self.config.ai_depth,
+                "black_ai_id": self.config.black_ai_id,
+                "white_ai_id": self.config.white_ai_id,
                 "board_layout": self.config.board_layout,
                 "game_time_ms": self.config.game_time_ms,
                 "max_moves": self.config.max_moves,
                 "player1_time_per_turn_s": self.config.player1_time_per_turn_s,
                 "player2_time_per_turn_s": self.config.player2_time_per_turn_s,
             },
+            "available_agents": list_agent_metadata(),
         }
 
     def status(self) -> dict:
@@ -206,7 +220,14 @@ class GameSession:
 
         return sorted(moved)
 
-    def _apply_move(self, move, source: str, search: Optional[dict] = None) -> dict:
+    def _apply_move(
+        self,
+        move,
+        source: str,
+        search: Optional[dict] = None,
+        agent_id: Optional[str] = None,
+        agent_label: Optional[str] = None,
+    ) -> dict:
         """Apply a validated move, record history entry, and advance the turn."""
         player = self.current_player
         snapshot = self.board.copy()
@@ -227,6 +248,8 @@ class GameSession:
                 "player": player,
                 "source": source,
                 "search": search,
+                "agent_id": agent_id,
+                "agent_label": agent_label,
                 "duration_ms": duration_ms,
             }
         )
@@ -242,6 +265,8 @@ class GameSession:
             "result": result,
             "source": source,
             "search": search,
+            "agent_id": agent_id,
+            "agent_label": agent_label,
         }
 
     def apply_human_move(self, payload: Optional[Mapping]) -> dict:
@@ -259,6 +284,19 @@ class GameSession:
 
         return self._apply_move(move, source=CONTROLLER_HUMAN)
 
+    def _current_turn_budget_ms(self) -> Optional[int]:
+        """Return remaining search budget for the active turn, including safety margin."""
+        if self.current_player == BLACK:
+            turn_limit_s = self.config.player1_time_per_turn_s
+        else:
+            turn_limit_s = self.config.player2_time_per_turn_s
+        if turn_limit_s <= 0:
+            return None
+
+        elapsed_ms = max(0, self._now_ms() - self.turn_start_ms)
+        remaining_ms = (turn_limit_s * 1000) - elapsed_ms - 100
+        return max(0, remaining_ms)
+
     def apply_agent_move(self) -> dict:
         """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
@@ -268,10 +306,19 @@ class GameSession:
         if self.current_controller != CONTROLLER_AI:
             return {"error": "It is a human-controlled turn."}
 
+        agent_id = self.ai_id_for_player(self.current_player)
+        agent = get_agent(agent_id)
+        time_budget_ms = self._current_turn_budget_ms()
         search_result = choose_move_with_info(
             self.board,
             self.current_player,
-            config=AgentConfig(depth=self.config.ai_depth),
+            agent=agent,
+            config=AgentConfig(
+                depth=self.config.ai_depth,
+                time_budget_ms=time_budget_ms,
+                opening_seed=self.opening_seed,
+                is_opening_turn=(self.current_player == BLACK and not self.move_history),
+            ),
         )
 
         move = search_result.move
@@ -279,7 +326,13 @@ class GameSession:
         if not ok:
             return {"error": f"Agent produced invalid move: {error}"}
 
-        return self._apply_move(move, source=CONTROLLER_AI, search=search_result.as_dict())
+        return self._apply_move(
+            move,
+            source=CONTROLLER_AI,
+            search=search_result.as_dict(),
+            agent_id=agent.id,
+            agent_label=agent.label,
+        )
 
     def undo(self) -> dict:
         """Revert the last move, including board and clock snapshots."""
@@ -377,6 +430,8 @@ class GameSession:
                     "pushoff": entry["result"]["pushoff"],
                     "source": entry["source"],
                     "search": entry["search"],
+                    "agent_id": entry.get("agent_id"),
+                    "agent_label": entry.get("agent_label"),
                     "duration_ms": entry.get("duration_ms", 0),
                 }
             )
@@ -397,10 +452,14 @@ class GameSession:
             "mode": self.config.mode,
             "human_side": self.config.human_side,
             "ai_depth": self.config.ai_depth,
+            "black_ai_id": self.config.black_ai_id,
+            "white_ai_id": self.config.white_ai_id,
             "board_layout": self.config.board_layout,
+            "game_time_ms": self.config.game_time_ms,
             "max_moves": self.config.max_moves,
             "player1_time_per_turn_s": self.config.player1_time_per_turn_s,
             "player2_time_per_turn_s": self.config.player2_time_per_turn_s,
+            "available_agents": list_agent_metadata(),
             "score": self.board.score,
             "game_over": status["game_over"],
             "winner": status["winner"],

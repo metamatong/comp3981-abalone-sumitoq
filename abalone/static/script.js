@@ -31,8 +31,16 @@ function parsePos(s) { return [ROWS.indexOf(s[0]), parseInt(s[1])]; }
 function getController(player) {
     return state?.controllers?.[String(player)] || CONTROLLER_HUMAN;
 }
+function getAgentMeta(agentId) {
+    return (state?.available_agents || []).find(agent => agent.id === agentId) || null;
+}
+function getSelectedAgentId(player) {
+    return player === BLACK ? state?.black_ai_id : state?.white_ai_id;
+}
 function controllerLabel(player) {
-    return getController(player) === CONTROLLER_AI ? 'AI' : 'Human';
+    if (getController(player) !== CONTROLLER_AI) return 'Human';
+    const meta = getAgentMeta(getSelectedAgentId(player));
+    return meta ? `AI: ${meta.label}` : 'AI';
 }
 
 /* ── State ─────────────────────────────────────────────── */
@@ -46,6 +54,11 @@ let hasPlayedGame = false;
 let wasPausedBeforeModal = false;
 let gameOverDismissed = false;
 let lastHistoryKey = '';
+let configModalDirty = false;
+
+function markConfigModalDirty() {
+    configModalDirty = true;
+}
 
 /* ── API ───────────────────────────────────────────────── */
 async function fetchState(force = false) {
@@ -55,6 +68,7 @@ async function fetchState(force = false) {
         state = await (await fetch('/api/state')).json();
         stateFetchedAt = Date.now();
         render();
+        if (isConfigModalOpen()) hydrateConfigModalFromState();
         maybeAutoAgentTurn();
     } finally {
         fetchInFlight = false;
@@ -93,6 +107,68 @@ function maybeAutoAgentTurn() {
 }
 
 /* ── Game Config Modal ─────────────────────────────────── */
+function setConfigValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el || value == null) return;
+    el.value = String(value);
+}
+function populateAgentSelectors(preferredValues = {}) {
+    const selects = [
+        { id: 'cfg-black-ai', value: preferredValues.black_ai_id ?? state?.black_ai_id },
+        { id: 'cfg-white-ai', value: preferredValues.white_ai_id ?? state?.white_ai_id },
+    ];
+    const agents = state?.available_agents || [];
+    for (const cfg of selects) {
+        const el = document.getElementById(cfg.id);
+        if (!el) continue;
+        const current = cfg.value || el.value;
+        el.innerHTML = agents.map(agent => (
+            `<option value="${agent.id}">${agent.label} (${agent.owner})</option>`
+        )).join('');
+        if (current) el.value = current;
+    }
+}
+function hydrateConfigModalFromState(force = false) {
+    if (!state) return;
+    if (!isConfigModalOpen()) return;
+    if (configModalDirty && !force) return;
+
+    const mode = state.mode || 'hvh';
+    const humanColor = state.human_side === WHITE ? 'white' : 'black';
+    const modeEl = document.querySelector(`input[name="cfg-mode"][value="${mode}"]`);
+    const colorEl = document.querySelector(`input[name="cfg-color"][value="${humanColor}"]`);
+    if (modeEl) modeEl.checked = true;
+    if (colorEl) colorEl.checked = true;
+
+    setConfigValue('cfg-layout', state.board_layout || 'standard');
+    setConfigValue('cfg-black-ai', state.black_ai_id);
+    setConfigValue('cfg-white-ai', state.white_ai_id);
+    setConfigValue('cfg-game-time', Math.floor((state.game_time_ms || 0) / 60000));
+    setConfigValue('cfg-max-moves', state.max_moves ?? 500);
+    setConfigValue('cfg-p1-move-limit', state.player1_time_per_turn_s ?? 30);
+    setConfigValue('cfg-p2-move-limit', state.player2_time_per_turn_s ?? 30);
+
+    populateAgentSelectors({
+        black_ai_id: state.black_ai_id,
+        white_ai_id: state.white_ai_id,
+    });
+    syncConfigSections();
+}
+function syncConfigSections() {
+    const modeEl = document.querySelector('input[name="cfg-mode"]:checked');
+    const humanColorSection = document.getElementById('cfg-human-color-section');
+    const blackAiSection = document.getElementById('cfg-black-ai-section');
+    const whiteAiSection = document.getElementById('cfg-white-ai-section');
+    if (!modeEl || !humanColorSection || !blackAiSection || !whiteAiSection) return;
+
+    const mode = modeEl.value;
+    const colorVal = document.querySelector('input[name="cfg-color"]:checked')?.value || 'black';
+    const humanSide = colorVal === 'black' ? BLACK : WHITE;
+
+    humanColorSection.style.display = mode === 'hva' ? '' : 'none';
+    blackAiSection.style.display = mode === 'ava' || (mode === 'hva' && humanSide !== BLACK) ? '' : 'none';
+    whiteAiSection.style.display = mode === 'ava' || (mode === 'hva' && humanSide !== WHITE) ? '' : 'none';
+}
 function isConfigModalOpen() {
     return document.getElementById('game-config-modal').classList.contains('show');
 }
@@ -110,9 +186,12 @@ async function openGameConfigModal() {
     }
     gameStarted = false;
     document.getElementById('game-config-modal').classList.add('show');
+    configModalDirty = false;
+    hydrateConfigModalFromState(true);
 }
 async function closeGameConfigModal() {
     document.getElementById('game-config-modal').classList.remove('show');
+    configModalDirty = false;
     // Resume if we auto-paused (and user didn't manually pause before)
     if (hasPlayedGame && !wasPausedBeforeModal && state?.paused && !state?.game_over) {
         await fetch('/api/pause', { method: 'POST' });
@@ -136,6 +215,8 @@ async function startGame() {
     const colorVal = document.querySelector('input[name="cfg-color"]:checked').value;
     const human_side = colorVal === 'black' ? 'black' : 'white';
     const board_layout = document.getElementById('cfg-layout').value;
+    const black_ai_id = document.getElementById('cfg-black-ai').value;
+    const white_ai_id = document.getElementById('cfg-white-ai').value;
     const gameTimeMin = Number(document.getElementById('cfg-game-time').value) || 0;
     const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
     const player1_time_per_turn_s = Number(document.getElementById('cfg-p1-move-limit').value) || 0;
@@ -145,7 +226,9 @@ async function startGame() {
         mode,
         human_side,
         board_layout,
-        ai_depth: Number(state?.ai_depth || 2),
+        ai_depth: null,
+        black_ai_id,
+        white_ai_id,
         game_time_ms: gameTimeMin * 60 * 1000,
         max_moves,
         player1_time_per_turn_s,
@@ -164,6 +247,7 @@ async function startGame() {
     hasPlayedGame = true;
     gameOverDismissed = false;
     wasPausedBeforeModal = true;  // skip resume logic — reset already unpaused
+    configModalDirty = false;
     closeGameConfigModal();
     await fetchState(true);
 }
@@ -413,6 +497,16 @@ function getClockMs(player) {
     return Math.max(0, ms);
 }
 
+function getTotalClockMs() {
+    const blackMs = state.time_left_ms?.[String(BLACK)] ?? 0;
+    const whiteMs = state.time_left_ms?.[String(WHITE)] ?? 0;
+    let totalMs = blackMs + whiteMs;
+    if (gameStarted && !state.game_over && !state.paused) {
+        totalMs -= (Date.now() - stateFetchedAt);
+    }
+    return Math.max(0, totalMs);
+}
+
 function formatClock(ms) {
     if (ms <= 0) return '00:00';
     const total = Math.ceil(ms / 1000);
@@ -424,9 +518,7 @@ function formatClock(ms) {
 function renderGameTimer() {
     const el = document.getElementById('game-timer');
     if (!el) return;
-    // Total game time = sum of both players' remaining time
-    const totalMs = getClockMs(BLACK) + getClockMs(WHITE);
-    el.textContent = formatClock(totalMs);
+    el.textContent = formatClock(getTotalClockMs());
 }
 
 function getMoveTimeLeftMs() {
@@ -732,11 +824,15 @@ function renderHistory() {
         const sym = e.player === BLACK ? '●' : '○';
         const symColor = e.player === BLACK ? '#555' : '#eee';
         const src = e.source === CONTROLLER_AI ? 'AI' : 'H';
+        const agentLabel = e.source === CONTROLLER_AI && e.agent_label
+            ? `<span class="history-agent">${e.agent_label}</span>`
+            : '';
         const dur = formatDuration(e.duration_ms);
         h += `<div class="history-entry">
       <span class="history-num">${i + 1}.</span>
       <span class="history-player" style="color:${symColor}">${sym}</span>
       <span class="history-source">${src}</span>
+      ${agentLabel}
       <span class="history-move">${e.notation}</span>
       ${e.pushoff ? '<span class="history-push">dislodged!</span>' : ''}
       <span class="history-time">${dur}</span>
@@ -760,6 +856,16 @@ function showGameOver() {
 /* ── Init ──────────────────────────────────────────────── */
 fetchState();
 openGameConfigModal();
+for (const el of document.querySelectorAll(
+    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-black-ai, #cfg-white-ai, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
+)) {
+    el.addEventListener('change', () => {
+        markConfigModalDirty();
+        syncConfigSections();
+    });
+    el.addEventListener('input', markConfigModalDirty);
+    el.addEventListener('focus', markConfigModalDirty);
+}
 document.getElementById('how-to-play-modal').addEventListener('click', (e) => {
     if (e.target.id === 'how-to-play-modal') closeHowToPlayModal();
 });

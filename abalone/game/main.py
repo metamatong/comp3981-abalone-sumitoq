@@ -9,6 +9,7 @@ from ..file_handler import (
     compare_position_list_files,
     export_position_list_states,
 )
+from ..players.registry import DEFAULT_BLACK_AI_ID, DEFAULT_WHITE_AI_ID, get_agent
 from ..state_space import (
     format_position_list_comparison,
     generate_legal_moves,
@@ -117,8 +118,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--depth",
         type=int,
-        default=2,
-        help="AI search depth (1-5).",
+        default=None,
+        help="Optional shared AI search depth override (1-5). Omit to use each preset's default depth.",
+    )
+    parser.add_argument(
+        "--black-ai",
+        default=DEFAULT_BLACK_AI_ID,
+        help="AI preset ID for black in AI-controlled modes.",
+    )
+    parser.add_argument(
+        "--white-ai",
+        default=DEFAULT_WHITE_AI_ID,
+        help="AI preset ID for white in AI-controlled modes.",
     )
     return parser
 
@@ -190,11 +201,22 @@ def main(argv: Optional[List[str]] = None):
         )
         return
 
-    if args.depth < 1 or args.depth > 5:
+    if args.depth is not None and (args.depth < 1 or args.depth > 5):
         parser.error("--depth must be between 1 and 5")
+    try:
+        get_agent(args.black_ai)
+        get_agent(args.white_ai)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     human_side = BLACK if args.human_side == "black" else WHITE
-    game = Game(mode=args.mode, human_side=human_side, ai_depth=args.depth)
+    game = Game(
+        mode=args.mode,
+        human_side=human_side,
+        ai_depth=args.depth,
+        black_ai_id=args.black_ai,
+        white_ai_id=args.white_ai,
+    )
     game.play()
 
 

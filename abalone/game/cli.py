@@ -2,6 +2,7 @@
 
 from typing import Optional
 
+from ..players.registry import DEFAULT_BLACK_AI_ID, DEFAULT_WHITE_AI_ID
 from ..state_space import generate_legal_moves, print_state_space_summary
 from .board import (
     BLACK,
@@ -21,10 +22,24 @@ from .session import GameSession
 class Game:
     """Interactive terminal game wrapper around `GameSession`."""
 
-    def __init__(self, mode: str = MODE_HVH, human_side: int = BLACK, ai_depth: int = 2):
-        """Create a terminal game using the requested mode and AI depth."""
-        config = GameConfig(mode=mode, human_side=human_side, ai_depth=ai_depth)
-        self.session = GameSession(config=config)
+    def __init__(
+        self,
+        mode: str = MODE_HVH,
+        human_side: int = BLACK,
+        ai_depth: Optional[int] = None,
+        black_ai_id: str = DEFAULT_BLACK_AI_ID,
+        white_ai_id: str = DEFAULT_WHITE_AI_ID,
+        opening_seed: Optional[int] = None,
+    ):
+        """Create a terminal game using the requested mode and optional AI depth override."""
+        config = GameConfig(
+            mode=mode,
+            human_side=human_side,
+            ai_depth=ai_depth,
+            black_ai_id=black_ai_id,
+            white_ai_id=white_ai_id,
+        )
+        self.session = GameSession(config=config, opening_seed=opening_seed)
 
     @property
     def board(self):
@@ -60,7 +75,8 @@ class Game:
                     print(f"  AI error: {result['error']}")
                     break
 
-                print(f"  >> {pname} (AI) plays {result['notation']}")
+                agent_label = result.get("agent_label") or "AI"
+                print(f"  >> {pname} ({agent_label}) plays {result['notation']}")
                 if result["result"]["pushed"]:
                     print(f"     Pushed: {', '.join(result['result']['pushed'])}")
                 if result["result"]["pushoff"]:

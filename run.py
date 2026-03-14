@@ -5,6 +5,7 @@ Run the Abalone game.
   python run.py          → web UI at http://localhost:8080
   python run.py cli      → terminal UI
   python run.py state    → state-space analysis
+  python run.py match    → AI-vs-AI benchmark rounds
   python run.py state --state-input-file foo.input --state-output-file foo.board
                          → expand one input board file to all next legal states
                            produces foo.board (board states) and foo.move (move notations)
@@ -22,6 +23,9 @@ if __name__ == '__main__':
     elif mode == 'state':
         from abalone.game.main import main
         main(['--state-space'] + sys.argv[2:])
+    elif mode == 'match':
+        from abalone.game.match import main
+        main(sys.argv[2:])
     else:
         from abalone.game.server import run
         port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080

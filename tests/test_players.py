@@ -1,8 +1,8 @@
 import unittest
 
+from abalone.ai.agent import choose_move
+from abalone.ai.types import AgentConfig
 from abalone.game.board import BLACK, Board
-from abalone.players.agent import choose_move
-from abalone.players.types import AgentConfig
 
 
 class MinimaxPlayerTests(unittest.TestCase):

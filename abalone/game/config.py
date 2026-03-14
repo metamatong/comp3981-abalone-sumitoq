@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from .board import BLACK, WHITE
+from ..players.registry import DEFAULT_BLACK_AI_ID, DEFAULT_WHITE_AI_ID, get_agent
 
 MODE_HVH = "hvh"
 MODE_HVA = "hva"
@@ -22,7 +23,9 @@ class GameConfig:
 
     mode: str = MODE_HVH
     human_side: int = BLACK
-    ai_depth: int = 2
+    ai_depth: Optional[int] = None
+    black_ai_id: str = DEFAULT_BLACK_AI_ID
+    white_ai_id: str = DEFAULT_WHITE_AI_ID
     board_layout: str = "standard"
     game_time_ms: int = 30 * 60 * 1000  # 0 = unlimited
     max_moves: int = 500
@@ -66,8 +69,14 @@ def normalize_human_side(value: object) -> int:
     raise ValueError(f"Unsupported human side '{value}'.")
 
 
-def normalize_depth(value: object) -> int:
-    """Normalize and validate search depth for the AI agent."""
+def normalize_depth(value: object) -> Optional[int]:
+    """Normalize and validate an optional search-depth override for the AI agent."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"", "default", "preset", "agent"}:
+            return None
     try:
         depth = int(value)
     except (TypeError, ValueError) as exc:
@@ -76,6 +85,12 @@ def normalize_depth(value: object) -> int:
     if depth < 1 or depth > 5:
         raise ValueError("ai_depth must be between 1 and 5.")
     return depth
+
+
+def normalize_ai_id(value: object) -> str:
+    """Normalize and validate a selectable AI agent ID."""
+    agent_id = str(value).strip()
+    return get_agent(agent_id).id
 
 
 def normalize_board_layout(value: object) -> str:
@@ -105,6 +120,8 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
     mode = current.mode
     human_side = current.human_side
     ai_depth = current.ai_depth
+    black_ai_id = current.black_ai_id
+    white_ai_id = current.white_ai_id
     board_layout = current.board_layout
     game_time_ms = current.game_time_ms
     max_moves = current.max_moves
@@ -117,6 +134,10 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
         human_side = normalize_human_side(payload["human_side"])
     if "ai_depth" in payload:
         ai_depth = normalize_depth(payload["ai_depth"])
+    if "black_ai_id" in payload:
+        black_ai_id = normalize_ai_id(payload["black_ai_id"])
+    if "white_ai_id" in payload:
+        white_ai_id = normalize_ai_id(payload["white_ai_id"])
     if "board_layout" in payload:
         board_layout = normalize_board_layout(payload["board_layout"])
     if "game_time_ms" in payload:
@@ -132,6 +153,8 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
         mode=mode,
         human_side=human_side,
         ai_depth=ai_depth,
+        black_ai_id=black_ai_id,
+        white_ai_id=white_ai_id,
         board_layout=board_layout,
         game_time_ms=game_time_ms,
         max_moves=max_moves,

@@ -2,42 +2,109 @@
 
 A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI and a state-space generator for building AI players.
 
-## Chi En please refer to "State-Space Generator" section for output file generation
-
 ## Quick Start
 
 ```bash
-# Web UI (opens browser automatically on port 8080)
-python run.py
+# Canonical web entrypoint
+python3 run.py
 
 # Web UI on a custom port
-python run.py web 9090
+python3 run.py web 9090
 
 # Terminal UI
-python run.py cli
+python3 run.py cli
 
-# Terminal with AI vs AI
-python run.py cli --mode ava --depth 2
+# Terminal with AI vs AI using selected presets
+python3 run.py cli --mode ava --depth 2 --black-ai default --white-ai kyle
 
 # Terminal with Human vs AI (human as white)
-python run.py cli --mode hva --human-side white --depth 2
+python3 run.py cli --mode hva --human-side white --depth 2 --black-ai default --white-ai jonah
+
+# Local benchmark rounds (colors swap each round)
+python3 run.py match --black-ai default --white-ai cole --rounds 3 --depth 2 --seed 7
 
 # State-space analysis
-python run.py state
+python3 run.py state
 
 # State-space: root + exactly one depth-1 child (selected by legal move index)
-python run.py state --state-depth-one --state-player black --state-child-index 0
+python3 run.py state --state-depth-one --state-player black --state-child-index 0
 
 # State-space: expand one custom input file and save all next states
-python run.py state --state-input-file Test1.input --state-output-file Test1.board
+python3 run.py state --state-input-file Test1.input --state-output-file Test1.board
 
 # State-space: verify generated child states against expected output
-python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
+python3 run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
+
+# Test suite
+python3 -m unittest discover -s tests
 ```
 
 The web server automatically tries nearby ports if the requested one is busy.
 
 No external dependencies — runs on Python 3.8+ standard library only.
+
+## CLI Usage
+
+The terminal entrypoint is:
+
+```bash
+python3 run.py cli
+```
+
+### AI Preset IDs
+
+Use these preset IDs with `--black-ai` and `--white-ai`:
+
+| Preset ID | Owner | Style |
+|-----------|-------|-------|
+| `default` | Shared | Shared baseline heuristic from `abalone/ai/heuristics.py` |
+| `kyle` | Kyle | Member-owned preset from `abalone/players/teams/kyle/` |
+| `abdullah` | Abdullah | Member-owned preset from `abalone/players/teams/abdullah/` |
+| `cole` | Cole | Member-owned preset from `abalone/players/teams/cole/` |
+| `jonah` | Jonah | Member-owned preset from `abalone/players/teams/jonah/` |
+
+### Where To Customize AI
+
+- Shared default AI: edit `abalone/ai/heuristics.py`
+- Kyle AI: edit `abalone/players/teams/kyle/heuristic.py`
+- Abdullah AI: edit `abalone/players/teams/abdullah/heuristic.py`
+- Cole AI: edit `abalone/players/teams/cole/heuristic.py`
+- Jonah AI: edit `abalone/players/teams/jonah/heuristic.py`
+- Each member preset currently starts with the same copied baseline weights, but those files are independent and can diverge without affecting `default`
+
+### Common CLI Modes
+
+```bash
+# Human vs Human
+python3 run.py cli --mode hvh
+
+# Human vs AI, human is black, white uses Jonah's preset
+python3 run.py cli --mode hva --human-side black --depth 2 --white-ai jonah
+
+# Human vs AI, human is white, black uses baseline
+python3 run.py cli --mode hva --human-side white --depth 2 --black-ai default
+
+# AI vs AI, black and white use different presets
+python3 run.py cli --mode ava --depth 2 --black-ai kyle --white-ai cole
+```
+
+### CLI Flags That Matter For AI
+
+| Flag | Meaning |
+|------|---------|
+| `--mode` | `hvh`, `hva`, or `ava` |
+| `--human-side` | Human color in `hva` mode |
+| `--depth` | Shared search-depth override for AI players |
+| `--black-ai` | Preset ID for black when black is AI-controlled |
+| `--white-ai` | Preset ID for white when white is AI-controlled |
+
+### Search Behavior
+
+- Black's first AI move is a random legal move, as required for the project.
+- After the opening move, all AI turns use the shared search engine in `abalone/ai/minimax.py`.
+- The search uses iterative deepening and respects the remaining per-turn budget.
+- If a search runs out of time before completing a depth, it returns the best fully completed result so far.
+- If no depth finishes in time, it falls back to an immediate legal move.
 
 ## How to Play
 
@@ -64,12 +131,14 @@ A game can end in four ways:
 
 ### Web UI Controls
 
-1. On launch, choose mode from the modal (`Human vs Human`, `Human (Black) vs AI`, `AI vs AI`).
-2. Click 1–3 of your marbles to select them (blue glow).
-3. Valid destinations light up as blue dots.
-4. Click a destination to execute the move.
-5. Use **AI Move** to manually trigger one AI turn, or let AI turns auto-play in AI-controlled turns.
-6. Use **Change Mode** to reopen the mode modal.
+1. On launch, choose mode from the modal (`Human vs Human`, `Human vs AI`, `AI vs AI`).
+2. In AI-controlled modes, select the `Black AI` and/or `White AI` preset by color.
+3. In `Human vs AI`, choose the human color; only the AI-controlled side selector is shown.
+4. Click 1–3 of your marbles to select them (blue glow).
+5. Valid destinations light up as blue dots.
+6. Click a destination to execute the move.
+7. AI turns auto-play in AI-controlled turns.
+8. Use **New Game** to reopen the game config modal.
 
 ## Coordinate System
 
@@ -119,6 +188,48 @@ The game tracks two timing systems, both configurable via `/api/config`:
 - **Per-turn time limit** (`player1_time_per_turn_s`, `player2_time_per_turn_s`, default 30s each) — if a player exceeds their turn limit, their turn is automatically skipped.
 - **Move duration** — each move in the history records `duration_ms`, the wall-clock time the player took.
 
+In CLI and benchmark usage:
+
+- `player1_time_per_turn_s` maps to Black
+- `player2_time_per_turn_s` maps to White
+- The AI reserves a small safety buffer before the hard turn limit when searching
+
+## Benchmark Mode
+
+Use `python3 run.py match` to compare two presets locally. One round plays two games with colors swapped.
+
+```bash
+python3 run.py match \
+  --black-ai default \
+  --white-ai cole \
+  --rounds 3 \
+  --depth 2 \
+  --move-time-s 5 \
+  --max-moves 50 \
+  --seed 7
+```
+
+### Benchmark Flags
+
+| Flag | Meaning |
+|------|---------|
+| `--black-ai` | Preset assigned to black in game 1 of each round |
+| `--white-ai` | Preset assigned to white in game 1 of each round |
+| `--rounds` | Number of side-swapped rounds |
+| `--depth` | Shared search-depth override |
+| `--layout` | `standard`, `belgian_daisy`, or `german_daisy` |
+| `--move-time-s` | Per-turn time limit for both colors |
+| `--max-moves` | Move cap before draw/tiebreak |
+| `--seed` | Base seed for reproducible random black openings |
+
+The summary prints:
+
+- wins, losses, and draws
+- captures
+- timeout fallback count
+- average move time
+- average completed depth
+
 ## State-Space Generator
 
 For building AI / search algorithms. This module returns only legal, deduplicated moves.
@@ -134,13 +245,10 @@ Given a `.input` file describing a board position, you can generate **two** outp
 
 Both files have the same number of lines in the same order — line *N* of the `.move` file is the move that produces line *N* of the `.board` file.
 
-## Before running the tests, ensure the input files are pasted 
-## into the directory abalone/state_space_inputs/
-
 **To generate both files, run:**
 
 ```bash
-python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-output-file abalone/state_space_outputs/Test1.board
+python3 run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-output-file abalone/state_space_outputs/Test1.board
 ```
 
 This produces:
@@ -150,13 +258,13 @@ This produces:
 **To generate from Test2:**
 
 ```bash
-python run.py state --state-input-file abalone/state_space_inputs/Test2.input --state-output-file abalone/state_space_outputs/Test2.board
+python3 run.py state --state-input-file abalone/state_space_inputs/Test2.input --state-output-file abalone/state_space_outputs/Test2.board
 ```
 
 You can also point at any custom input/output paths:
 
 ```bash
-python run.py state --state-input-file my_board.input --state-output-file my_board.board
+python3 run.py state --state-input-file my_board.input --state-output-file my_board.board
 ```
 
 The `.move` file is always created alongside the `.board` file automatically (same directory, same stem, `.move` extension).
@@ -198,13 +306,13 @@ B5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,
 
 ```bash
 # Print legal move summary for both players on the standard starting board
-python run.py state
+python3 run.py state
 
 # Show root summary + one depth-1 child (by legal move index)
-python run.py state --state-depth-one --state-player black --state-child-index 0
+python3 run.py state --state-depth-one --state-player black --state-child-index 0
 
 # Verify generated board states against an expected .board file
-python run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
+python3 run.py state --state-input-file abalone/state_space_inputs/Test1.input --state-verify
 ```
 
 ### Usage
@@ -258,7 +366,8 @@ Browser (HTML/JS)              Python (abalone/)
                                state_space.py   legal move generation
                                game/cli.py      CLI game loop
                                game/main.py     CLI entry point
-                               players/*        minimax bot + heuristics + validator
+                               ai/*             shared search + heuristics + types
+                               players/*        preset registry + team-owned AI configs
 ```
 
 All game logic runs in Python. The browser is a pure display layer — it renders the JSON state and sends clicks back as API calls.
@@ -267,6 +376,12 @@ All game logic runs in Python. The browser is a pure display layer — it render
 abalone/
   __init__.py
   board.py         # compatibility shim -> game/board.py
+  ai/
+    agent.py       # shared opening rule + choose_move(...) interface
+    minimax.py     # iterative deepening minimax + alpha-beta + move ordering
+    heuristics.py  # shared heuristic features + default weighted evaluator
+    defaults.py    # shared default AI preset
+    types.py       # AgentDefinition + AgentConfig
   game/
     board.py       # Board, Move, positions, validation, apply, display
     cli.py         # CLI game loop with text UI and AI turns
@@ -275,11 +390,17 @@ abalone/
     session.py     # shared runtime state, timers, clocks
     config.py      # mode/layout/timer configuration
   players/
-    agent.py       # choose_move(...) public interface
-    minimax.py     # minimax + alpha-beta search
-    heuristics.py  # pluggable board evaluation (balanced, material presets)
+    registry.py    # selectable AI preset registry
+    teams/         # Kyle / Abdullah / Cole / Jonah agent packages
+      kyle/        # Kyle-owned agents.py + heuristic.py
+      abdullah/    # Abdullah-owned agents.py + heuristic.py
+      cole/        # Cole-owned agents.py + heuristic.py
+      jonah/       # Jonah-owned agents.py + heuristic.py
     validator.py   # shared move payload + legality validation
-    types.py       # AgentConfig (depth, heuristic, tie_break)
+    agent.py       # compatibility shim -> ai/agent.py
+    minimax.py     # compatibility shim -> ai/minimax.py
+    heuristics.py  # compatibility shim -> ai/heuristics.py
+    types.py       # compatibility shim -> ai/types.py
   state_space.py   # generate_legal_moves()
   server.py        # compatibility shim -> game/server.py
   main.py          # compatibility shim -> game/main.py
@@ -291,14 +412,14 @@ tests/
   test_last_move_indicator.py
   test_players.py
   test_session_modes.py
-run.py             # Runner: web / cli / state
+run.py             # Runner: web / cli / state / match
 ```
 
 ## API Endpoints (Web UI)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/state` | Current board, score, timers, legal moves, history |
+| GET | `/api/state` | Current board, score, timers, legal moves, history, available AI presets |
 | POST | `/api/move` | Apply a move `{marbles: ["e5"], direction: [0,1]}` |
 | POST | `/api/agent-move` | Apply one AI move for the current AI-controlled turn |
 | POST | `/api/config` | Set config (see fields below) |
@@ -316,8 +437,12 @@ All fields are optional — send only the ones you want to change.
 | `mode` | string | `"hvh"` | `hvh` (human-human), `hva` (human-AI), `ava` (AI-AI) |
 | `human_side` | string/int | `"black"` | Human color in `hva` mode |
 | `ai_depth` | int | `2` | Minimax search depth (1–5) |
+| `black_ai_id` | string | `"default"` | Selected AI preset for black |
+| `white_ai_id` | string | `"default"` | Selected AI preset for white |
 | `board_layout` | string | `"standard"` | `standard`, `belgian_daisy`, or `german_daisy` |
 | `game_time_ms` | int | `1800000` | Total shared game clock in ms (0 = unlimited) |
 | `max_moves` | int | `500` | Move limit before game ends (0 = unlimited) |
 | `player1_time_per_turn_s` | int | `30` | Black's per-turn time limit in seconds |
 | `player2_time_per_turn_s` | int | `30` | White's per-turn time limit in seconds |
+
+Fixed `--seed` values make the random black opening reproducible across benchmark runs.
