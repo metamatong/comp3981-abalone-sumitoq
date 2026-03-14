@@ -9,7 +9,7 @@ AGENTS = [
         label="Kyle",
         owner="Kyle",
         evaluator=evaluate_kyle,
-        default_depth=5,
+        default_depth=3,
         tie_break="lexicographic",
     )
 ]

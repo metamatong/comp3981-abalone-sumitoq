@@ -9,7 +9,7 @@ AGENTS = [
         label="Cole",
         owner="Cole",
         evaluator=evaluate_cole,
-        default_depth=5,
+        default_depth=2,
         tie_break="lexicographic",
     )
 ]
