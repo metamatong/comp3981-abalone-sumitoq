@@ -211,12 +211,19 @@ def search_best_move(
             agent_label=resolved_agent.label,
         )
 
+    avoid_move = resolved_config.avoid_move
+    avoidance_applied = False
+    if avoid_move is not None and len(legal_moves) > 1:
+        filtered = [move for move in legal_moves if move != avoid_move]
+        if filtered:
+            legal_moves = filtered
+            avoidance_applied = True
+
     total_nodes = 0
     best_move = None
     best_score = 0.0
     completed_depth = 0
     timed_out = False
-    avoid_move = resolved_config.avoid_move
 
     for depth in range(1, requested_depth + 1):
         stats = {"nodes": 0}
@@ -249,59 +256,8 @@ def search_best_move(
         best_score = 0.0
         decision_source = "timeout_fallback"
         timed_out = True
-
-    if avoid_move is not None and best_move is not None and best_move == avoid_move:
-        alternate = None
-        alternate_score = best_score
-        deadline_hit = False
-        depth_for_rescore = max(0, completed_depth - 1)
-        opponent = _opponent(player)
-
-        if completed_depth > 0:
-            best_value = -inf
-            for move in legal_moves:
-                if move == avoid_move:
-                    continue
-                stats = {"nodes": 0}
-                try:
-                    _check_deadline(deadline_at)
-                    child = board.copy()
-                    child.apply_move(move, player)
-                    value, _ = _minimax(
-                        child,
-                        opponent,
-                        player,
-                        depth_for_rescore,
-                        -inf,
-                        inf,
-                        resolved_agent.evaluator,
-                        resolved_config.tie_break,
-                        deadline_at,
-                        stats,
-                    )
-                except _SearchTimeout:
-                    total_nodes += stats["nodes"]
-                    deadline_hit = True
-                    break
-
-                total_nodes += stats["nodes"]
-                if value > best_value or (value == best_value and _prefer_by_tie_break(resolved_config.tie_break, move, alternate)):
-                    best_value = value
-                    alternate = move
-                    alternate_score = value
-
-        if alternate is None:
-            for move in legal_moves:
-                if move != avoid_move:
-                    alternate = move
-                    break
-
-        if alternate is not None:
-            best_move = alternate
-            best_score = alternate_score
-            decision_source = "repeat_avoidance"
-            if deadline_hit:
-                timed_out = True
+    if avoidance_applied and decision_source == "search":
+        decision_source = "repeat_avoidance"
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return SearchResult(
