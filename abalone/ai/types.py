@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ..game.board import Board
+from ..game.board import Board, Move
 
 Evaluator = Callable[[Board, int], float]
 
@@ -29,6 +29,7 @@ class AgentConfig:
     time_budget_ms: Optional[int] = None
     opening_seed: Optional[int] = None
     is_opening_turn: bool = False
+    avoid_move: Optional[Move] = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class ResolvedAgentConfig:
     time_budget_ms: Optional[int]
     opening_seed: Optional[int]
     is_opening_turn: bool
+    avoid_move: Optional[Move]
 
 
 def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] = None) -> ResolvedAgentConfig:
@@ -51,4 +53,5 @@ def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] =
         time_budget_ms=config.time_budget_ms,
         opening_seed=config.opening_seed,
         is_opening_turn=config.is_opening_turn,
+        avoid_move=config.avoid_move,
     )

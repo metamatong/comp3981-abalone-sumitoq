@@ -12,6 +12,7 @@ from abalone.game.config import GameConfig, MODE_AVA, MODE_HVA
 from abalone.game.match import main as match_main
 from abalone.game.session import GameSession
 from abalone.players.registry import get_agent
+from abalone.state_space import generate_legal_moves
 
 
 class AgentRuntimeTests(unittest.TestCase):
@@ -190,6 +191,77 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(result.timed_out)
         self.assertEqual(result.decision_source, "timeout_fallback")
         self.assertEqual(result.completed_depth, 0)
+
+    def test_repetition_avoidance_breaks_loop(self):
+        session = GameSession(config=GameConfig(mode=MODE_AVA, ai_depth=1), opening_seed=3)
+        session.reset()
+
+        board = Board()
+        board.clear()
+        board.cells[(4, 5)] = BLACK
+        board.cells[(5, 6)] = WHITE
+        session.board = board
+        session.current_player = BLACK
+        session.started = True
+
+        black_moves = generate_legal_moves(board, BLACK)
+        white_moves = generate_legal_moves(board, WHITE)
+        self.assertGreaterEqual(len(black_moves), 2)
+        self.assertGreaterEqual(len(white_moves), 1)
+
+        baseline = choose_move_with_info(
+            board,
+            BLACK,
+            agent=get_agent("default"),
+            config=AgentConfig(depth=1, is_opening_turn=False),
+        )
+        move_a = baseline.move
+        move_b = white_moves[0]
+        snapshot = board.copy()
+        session.move_history = [
+            {"move": move_a, "player": BLACK, "snapshot": snapshot},
+            {"move": move_b, "player": WHITE, "snapshot": board.copy()},
+        ]
+
+        result = session.apply_agent_move()
+        self.assertTrue(result.get("ok"))
+        self.assertNotEqual(result["notation"], move_a.to_notation())
+        self.assertEqual(result["search"]["decision_source"], "repeat_avoidance")
+
+    def test_two_move_cycle_avoidance_breaks_loop(self):
+        session = GameSession(config=GameConfig(mode=MODE_AVA, ai_depth=1), opening_seed=3)
+        session.reset()
+
+        board = Board()
+        board.clear()
+        board.cells[(4, 5)] = BLACK
+        board.cells[(5, 6)] = WHITE
+        session.board = board
+        session.current_player = BLACK
+        session.started = True
+
+        black_moves = generate_legal_moves(board, BLACK)
+        white_moves = generate_legal_moves(board, WHITE)
+        self.assertGreaterEqual(len(black_moves), 2)
+        self.assertGreaterEqual(len(white_moves), 2)
+
+        move_a1 = black_moves[0]
+        move_a2 = black_moves[1]
+        move_b1 = white_moves[0]
+        move_b2 = white_moves[1]
+
+        snapshot = board.copy()
+        session.move_history = [
+            {"move": move_a1, "player": BLACK, "snapshot": snapshot},
+            {"move": move_b1, "player": WHITE, "snapshot": board.copy()},
+            {"move": move_a2, "player": BLACK, "snapshot": board.copy()},
+            {"move": move_b2, "player": WHITE, "snapshot": board.copy()},
+        ]
+
+        result = session.apply_agent_move()
+        self.assertTrue(result.get("ok"))
+        self.assertNotEqual(result["notation"], move_a1.to_notation())
+        self.assertEqual(result["search"]["decision_source"], "repeat_avoidance")
 
     def test_match_mode_is_deterministic_with_fixed_seed(self):
         argv = [

@@ -9,7 +9,7 @@ from ..ai.types import AgentConfig
 from ..players.registry import get_agent, list_agent_metadata
 from ..players.validator import validate_move, validate_payload_move
 from ..state_space import generate_legal_moves
-from .board import BLACK, WHITE, Board, is_valid, neighbor, pos_to_str, str_to_pos
+from .board import BLACK, WHITE, Board, EMPTY, Move, is_valid, neighbor, pos_to_str, str_to_pos
 from .config import CONTROLLER_AI, CONTROLLER_HUMAN, GameConfig, merge_config
 
 
@@ -297,6 +297,31 @@ class GameSession:
         remaining_ms = (turn_limit_s * 1000) - elapsed_ms - 100
         return max(0, remaining_ms)
 
+    @staticmethod
+    def _board_signature(board: Board) -> tuple:
+        """Serialize board occupancy and score for cycle detection."""
+        occupied = tuple(sorted((pos, val) for pos, val in board.cells.items() if val != EMPTY))
+        return (occupied, board.score[BLACK], board.score[WHITE])
+
+    def _repeat_move_to_avoid(self) -> Optional[Move]:
+        """Detect repeated board states and return the last move from that state to avoid."""
+        if len(self.move_history) < 2:
+            return None
+
+        current_sig = self._board_signature(self.board)
+        # Look back at least one full ply so we only match prior states.
+        for index in range(len(self.move_history) - 2, -1, -1):
+            entry = self.move_history[index]
+            if entry.get("player") != self.current_player:
+                continue
+            snapshot = entry.get("snapshot")
+            move = entry.get("move")
+            if snapshot is None or move is None:
+                continue
+            if self._board_signature(snapshot) == current_sig:
+                return move
+        return None
+
     def apply_agent_move(self) -> dict:
         """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
@@ -309,6 +334,7 @@ class GameSession:
         agent_id = self.ai_id_for_player(self.current_player)
         agent = get_agent(agent_id)
         time_budget_ms = self._current_turn_budget_ms()
+        avoid_move = self._repeat_move_to_avoid()
         search_result = choose_move_with_info(
             self.board,
             self.current_player,
@@ -318,6 +344,7 @@ class GameSession:
                 time_budget_ms=time_budget_ms,
                 opening_seed=self.opening_seed,
                 is_opening_turn=(self.current_player == BLACK and not self.move_history),
+                avoid_move=avoid_move,
             ),
         )
 
