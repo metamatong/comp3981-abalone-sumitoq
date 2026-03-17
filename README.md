@@ -23,6 +23,9 @@ python3 run.py cli --mode hva --human-side white --depth 2 --black-ai default --
 # Local benchmark rounds (colors swap each round)
 python3 run.py match --black-ai default --white-ai cole --rounds 3 --depth 2 --seed 7
 
+# Single AI-vs-AI simulation report
+python3 run.py duel --black-ai default --white-ai cole --depth 2
+
 # State-space analysis
 python3 run.py state
 

@@ -255,9 +255,15 @@ def build_weighted_evaluator(weights: Dict[str, float]) -> Callable[[Board, int]
     def evaluator(board: Board, player: int) -> float:
         return evaluate_with_weights(board, player, resolved)
 
+    # Attach weights for reporting/inspection (e.g., benchmarking summaries).
+    evaluator.weights = dict(resolved)
     return evaluator
 
 
 def evaluate_board(board: Board, player: int) -> float:
     """Default balanced heuristic evaluation."""
     return evaluate_with_weights(board, player, DEFAULT_WEIGHTS)
+
+
+# Attach baseline weights for reporting/inspection.
+evaluate_board.weights = dict(DEFAULT_WEIGHTS)
