@@ -2,18 +2,26 @@
 
 from ....ai.heuristics import build_weighted_evaluator
 
-# Starts from the shared baseline. Abdullah can tune only this file later.
 ABDULLAH_WEIGHTS = {
-    "marble": 50000.0,    # Material advantage (number of marbles)
-    "center": 40.0,       # Distance to the center of the board
-    "cohesion": 35.0,     # Grouping of marbles together
-    "cluster": 30.0,      # Number of contiguous marble groups
-    "edge": 60.0,         # Distance from the edge of the board
-    "formation": 50.0,    # Maintaining strong defensive shapes
-    "push": 120.0,        # Ability to push opponent marbles
-    "threat": 80.0,       # Direct threats to push opponent off board
-    "mobility": 20.0,     # Number of available legal moves
-    "stability": 25.0,    # How safe marbles are from being pushed
+    "marble": 50000.0,  # Primary objective: maximize material advantage
+
+    # Aggressive playstyle
+    # Reduced emphasis on positional safety
+    "center": 25.0,     # Lower priority on central positioning
+    "cohesion": 20.0,   # Less focus on tight grouping
+    "cluster": 15.0,    # Reduced importance of large clusters
+    "stability": 15.0,  # Lower concern for defensive stability
+
+    # Strong offensive prioritization
+    "push": 1000.0,      # High priority on pushing opponent marbles
+    "threat": 150.0,    # Strong emphasis on creating push threats
+
+    # Moderate defensive considerations
+    "edge": 40.0,       # Some penalty for edge proximity
+    "formation": 35.0,  # Moderate value for structured formations
+
+    # Slightly increased mobility
+    "mobility": 30.0,   # Encourages maintaining move options
 }
 
 evaluate_abdullah = build_weighted_evaluator(ABDULLAH_WEIGHTS)
