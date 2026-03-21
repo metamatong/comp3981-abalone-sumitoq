@@ -13,7 +13,7 @@ ABDULLAH_WEIGHTS = {
     "stability": 15.0,  # Lower concern for defensive stability
 
     # Strong offensive prioritization
-    "push": 1000.0,      # High priority on pushing opponent marbles
+    "push": 200.0,      # High priority on pushing opponent marbles
     "threat": 150.0,    # Strong emphasis on creating push threats
 
     # Moderate defensive considerations
