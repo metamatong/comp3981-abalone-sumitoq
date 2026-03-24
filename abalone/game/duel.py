@@ -4,7 +4,7 @@ import argparse
 import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from typing import Dict, List, Optional
 
@@ -160,15 +160,23 @@ def _run_all_opponents_games(
         seed=seed,
     )
     worker_count = _resolve_worker_count(jobs, len(scheduled_games))
+    _print_gauntlet_start(agent_id, len(scheduled_games), worker_count)
     if worker_count <= 1:
-        return [_run_all_opponents_game(job) for job in scheduled_games]
+        return _run_scheduled_games_serial(scheduled_games)
 
     try:
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            games = list(executor.map(_run_all_opponents_game, scheduled_games))
+            futures = [executor.submit(_run_all_opponents_game, job) for job in scheduled_games]
+            games = []
+            started_at = time.perf_counter()
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                game = future.result()
+                games.append(game)
+                _print_gauntlet_progress(completed_count, len(scheduled_games), started_at, game)
     except (BrokenProcessPool, OSError) as exc:
         _print_parallel_fallback_warning(exc)
-        return [_run_all_opponents_game(job) for job in scheduled_games]
+        _print_gauntlet_restart(len(scheduled_games))
+        return _run_scheduled_games_serial(scheduled_games)
     return sorted(games, key=lambda game: game["index"])
 
 
@@ -209,6 +217,66 @@ def _resolve_worker_count(jobs: Optional[int], game_count: int) -> int:
         return 0
     requested = jobs if jobs is not None else (os.cpu_count() or 1)
     return max(1, min(requested, game_count))
+
+
+def _run_scheduled_games_serial(scheduled_games: List[dict]) -> List[dict]:
+    games = []
+    started_at = time.perf_counter()
+    for completed_count, job in enumerate(scheduled_games, start=1):
+        game = _run_all_opponents_game(job)
+        games.append(game)
+        _print_gauntlet_progress(completed_count, len(scheduled_games), started_at, game)
+    return games
+
+
+def _print_gauntlet_start(agent_id: str, game_count: int, worker_count: int) -> None:
+    mode = "serial" if worker_count <= 1 else f"{worker_count} workers"
+    print(
+        f"[duel] Starting gauntlet for {agent_id}: {game_count} game(s), {mode}.",
+        file=sys.stderr,
+    )
+
+
+def _print_gauntlet_restart(game_count: int) -> None:
+    print(
+        f"[duel] Restarting gauntlet serially for {game_count} game(s).",
+        file=sys.stderr,
+    )
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60.0:
+        return f"{seconds:.1f}s"
+
+    total_seconds = int(round(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def _progress_bar(completed: int, total: int, width: int = 20) -> str:
+    if total <= 0:
+        return "[" + ("-" * width) + "]"
+    filled = min(width, int((completed * width) / total))
+    return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+
+def _print_gauntlet_progress(completed: int, total: int, started_at: float, game: dict) -> None:
+    elapsed_s = max(0.0, time.perf_counter() - started_at)
+    remaining = max(0, total - completed)
+    avg_s = elapsed_s / completed if completed else 0.0
+    eta_s = avg_s * remaining
+    winner = game["winner_ai_id"] or "draw"
+    print(
+        f"[duel] {_progress_bar(completed, total)} {completed}/{total} "
+        f"elapsed={_format_duration(elapsed_s)} eta={_format_duration(eta_s)} "
+        f"last={game['black_ai_id']} vs {game['white_ai_id']} -> {winner} "
+        f"({game['moves']} moves, {game['duration_s']:.1f}s)",
+        file=sys.stderr,
+    )
 
 
 def _print_parallel_fallback_warning(exc: BaseException) -> None:

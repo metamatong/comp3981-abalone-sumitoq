@@ -16,14 +16,24 @@ class _FakeExecutor:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def map(self, fn, jobs):
-        scheduled = list(jobs)
-        return [fn(job) for job in reversed(scheduled)]
+    def submit(self, fn, job):
+        return _FakeFuture(fn(job))
 
 
-class _BrokenMapExecutor(_FakeExecutor):
-    def map(self, fn, jobs):
-        raise duel.BrokenProcessPool("pool broke")
+class _FakeFuture:
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+
+    def result(self):
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class _BrokenExecutor(_FakeExecutor):
+    def submit(self, fn, job):
+        return _FakeFuture(error=duel.BrokenProcessPool("pool broke"))
 
 
 class DuelTests(unittest.TestCase):
@@ -43,7 +53,11 @@ class DuelTests(unittest.TestCase):
             duel,
             "_run_all_opponents_game",
             side_effect=lambda job: {"index": job["index"]},
-        ), mock.patch.object(duel, "ProcessPoolExecutor", _FakeExecutor):
+        ), mock.patch.object(duel, "ProcessPoolExecutor", _FakeExecutor), mock.patch.object(
+            duel,
+            "as_completed",
+            side_effect=lambda futures: list(reversed(futures)),
+        ), mock.patch.object(duel, "_print_gauntlet_start"), mock.patch.object(duel, "_print_gauntlet_progress"):
             games = duel._run_all_opponents_games(
                 agent_id="default",
                 depth=1,
@@ -67,7 +81,10 @@ class DuelTests(unittest.TestCase):
             duel,
             "_run_all_opponents_game",
             side_effect=lambda job: {"index": job["index"]},
-        ), mock.patch.object(duel, "ProcessPoolExecutor", side_effect=PermissionError("blocked")), contextlib.redirect_stderr(
+        ), mock.patch.object(duel, "ProcessPoolExecutor", side_effect=PermissionError("blocked")), mock.patch.object(
+            duel,
+            "_print_gauntlet_progress",
+        ), contextlib.redirect_stderr(
             stderr
         ):
             games = duel._run_all_opponents_games(
@@ -94,7 +111,11 @@ class DuelTests(unittest.TestCase):
             duel,
             "_run_all_opponents_game",
             side_effect=lambda job: {"index": job["index"]},
-        ), mock.patch.object(duel, "ProcessPoolExecutor", _BrokenMapExecutor), contextlib.redirect_stderr(stderr):
+        ), mock.patch.object(duel, "ProcessPoolExecutor", _BrokenExecutor), mock.patch.object(
+            duel,
+            "as_completed",
+            side_effect=lambda futures: futures,
+        ), mock.patch.object(duel, "_print_gauntlet_progress"), contextlib.redirect_stderr(stderr):
             games = duel._run_all_opponents_games(
                 agent_id="default",
                 depth=1,
@@ -107,6 +128,42 @@ class DuelTests(unittest.TestCase):
 
         self.assertEqual([game["index"] for game in games], [0, 1])
         self.assertIn("BrokenProcessPool", stderr.getvalue())
+        self.assertIn("Restarting gauntlet serially", stderr.getvalue())
+
+    def test_run_all_opponents_games_prints_progress_in_serial_mode(self):
+        scheduled_jobs = [
+            {"index": 0, "black_ai_id": "default", "white_ai_id": "kyle"},
+            {"index": 1, "black_ai_id": "kyle", "white_ai_id": "default"},
+        ]
+
+        stderr = io.StringIO()
+        with mock.patch.object(duel, "_build_all_opponents_jobs", return_value=scheduled_jobs), mock.patch.object(
+            duel,
+            "_run_all_opponents_game",
+            side_effect=lambda job: {
+                "index": job["index"],
+                "black_ai_id": job["black_ai_id"],
+                "white_ai_id": job["white_ai_id"],
+                "winner_ai_id": None,
+                "moves": 6,
+                "duration_s": 0.1,
+                "agent_color": "black",
+            },
+        ), contextlib.redirect_stderr(stderr):
+            duel._run_all_opponents_games(
+                agent_id="default",
+                depth=1,
+                layout="standard",
+                move_time_s=5,
+                max_moves=10,
+                seed=3,
+                jobs=1,
+            )
+
+        output = stderr.getvalue()
+        self.assertIn("Starting gauntlet for default", output)
+        self.assertIn("1/2", output)
+        self.assertIn("2/2", output)
 
     def test_main_forwards_jobs_for_all_opponents_mode(self):
         with mock.patch.object(duel, "_run_all_opponents_games", return_value=[]) as run_games, mock.patch.object(
