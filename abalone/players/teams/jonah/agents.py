@@ -9,7 +9,7 @@ AGENTS = [
         label="Jonah",
         owner="Jonah",
         evaluator=evaluate_jonah,
-        default_depth=2,
+        default_depth=3,
         tie_break="lexicographic",
     )
 ]
