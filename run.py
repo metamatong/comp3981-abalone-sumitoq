@@ -6,7 +6,7 @@ Run the Abalone game.
   python run.py cli      → terminal UI
   python run.py state    → state-space analysis
   python run.py match    → AI-vs-AI benchmark rounds
-  python run.py duel     → AI-vs-AI single-game report
+  python run.py duel     → AI-vs-AI duel reports (single game or one-vs-all gauntlet)
   python run.py state --state-input-file foo.input --state-output-file foo.board
                          → expand one input board file to all next legal states
                            produces foo.board (board states) and foo.move (move notations)

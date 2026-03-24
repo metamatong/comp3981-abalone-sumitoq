@@ -26,6 +26,9 @@ python3 run.py match --black-ai default --white-ai cole --rounds 3 --depth 2 --s
 # Single AI-vs-AI simulation report
 python3 run.py duel --black-ai default --white-ai cole --depth 2
 
+# One-agent gauntlet (two games vs every other agent, one per color)
+python3 run.py duel --agent jonah --all-opponents --depth 2
+
 # State-space analysis
 python3 run.py state
 
