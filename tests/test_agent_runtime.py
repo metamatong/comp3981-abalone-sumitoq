@@ -94,6 +94,7 @@ class AgentRuntimeTests(unittest.TestCase):
         board.clear()
         board.cells[(4, 5)] = BLACK
         board.cells[(8, 9)] = WHITE
+        board.recompute_zhash()
 
         session = GameSession(
             config=GameConfig(
@@ -138,6 +139,7 @@ class AgentRuntimeTests(unittest.TestCase):
         board.clear()
         board.cells[(4, 5)] = BLACK
         board.cells[(8, 9)] = WHITE
+        board.recompute_zhash()
 
         def slow_eval(current_board, player):
             time.sleep(0.003)
@@ -200,6 +202,7 @@ class AgentRuntimeTests(unittest.TestCase):
         board.clear()
         board.cells[(4, 5)] = BLACK
         board.cells[(5, 6)] = WHITE
+        board.recompute_zhash()
         session.board = board
         session.current_player = BLACK
         session.started = True
@@ -236,6 +239,7 @@ class AgentRuntimeTests(unittest.TestCase):
         board.clear()
         board.cells[(4, 5)] = BLACK
         board.cells[(5, 6)] = WHITE
+        board.recompute_zhash()
         session.board = board
         session.current_player = BLACK
         session.started = True

@@ -5,10 +5,26 @@ from math import inf
 import time
 from typing import Dict, List, Optional, Tuple
 
-from ..game.board import BLACK, WHITE, Board, Move, is_valid, neighbor
+from ..game.board import BLACK, WHITE, Board, Move, ZOBRIST, is_valid, neighbor
 from ..state_space import generate_legal_moves
 from .defaults import DEFAULT_AGENT
 from .types import AgentConfig, AgentDefinition, resolve_agent_config
+
+
+# Transposition Table flag constants
+EXACT = 0
+LOWERBOUND = 1
+UPPERBOUND = 2
+
+
+@dataclass
+class TTEntry:
+    """Entry stored in the transposition table."""
+
+    depth: int
+    value: float
+    flag: int
+    move: Optional[Move]
 
 
 @dataclass(frozen=True)
@@ -70,11 +86,24 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
     return is_valid(ahead) and board.cells.get(ahead) == opponent
 
 
-def _ordered_moves(board: Board, player: int, moves: List[Move]) -> List[Move]:
-    """Order moves to improve alpha-beta pruning deterministically."""
+def _ordered_moves(
+    board: Board,
+    player: int,
+    moves: List[Move],
+    tt_move: Optional[Move] = None,
+    killer_moves: Optional[List[Optional[Move]]] = None,
+    depth: int = 0,
+) -> List[Move]:
+    """Order moves to improve alpha-beta pruning deterministically.
 
-    def key(move: Move) -> Tuple[int, int, str]:
+    Priority: TT move > killer moves > push moves > multi-marble > notation.
+    """
+    killer1 = killer_moves[depth] if killer_moves and depth < len(killer_moves) else None
+
+    def key(move: Move) -> Tuple[int, int, int, int, str]:
         return (
+            0 if move == tt_move else 1,
+            0 if move == killer1 else 1,
             0 if _is_push_move(board, player, move) else 1,
             -move.count,
             move.to_notation(),
@@ -98,6 +127,11 @@ def _check_deadline(deadline_at: Optional[float]) -> None:
         raise _SearchTimeout
 
 
+def _make_tt_key(board: Board, to_move: int) -> int:
+    """Create TT hash key using Zobrist hash XOR'd with side-to-move key."""
+    return board.zhash ^ ZOBRIST[('side', to_move)]
+
+
 def _minimax(
     board: Board,
     to_move: int,
@@ -109,19 +143,44 @@ def _minimax(
     tie_break: str,
     deadline_at: Optional[float],
     stats: Dict[str, int],
+    tt: Dict[int, TTEntry],
+    killer_moves: List[Optional[Move]],
+    root_legal_moves: Optional[List[Move]] = None,
 ) -> Tuple[float, Optional[Move]]:
-    """Run depth-limited minimax with alpha-beta pruning and deterministic ordering."""
+    """Run depth-limited minimax with alpha-beta pruning, TT, killer moves, and undo/redo."""
     _check_deadline(deadline_at)
     stats["nodes"] += 1
+
+    alpha_orig = alpha
+    beta_orig = beta
+
+    tt_key = _make_tt_key(board, to_move)
+    tt_entry = tt.get(tt_key)
+
+    if tt_entry is not None and tt_entry.depth >= depth:
+        if tt_entry.flag == EXACT:
+            return tt_entry.value, tt_entry.move
+        elif tt_entry.flag == LOWERBOUND:
+            alpha = max(alpha, tt_entry.value)
+        elif tt_entry.flag == UPPERBOUND:
+            beta = min(beta, tt_entry.value)
+        if alpha >= beta:
+            return tt_entry.value, tt_entry.move
+
+    tt_move = tt_entry.move if tt_entry is not None else None
 
     if depth == 0 or _is_terminal(board):
         return evaluator(board, root_player), None
 
-    legal_moves = generate_legal_moves(board, to_move)
+    if root_legal_moves is not None:
+        legal_moves = root_legal_moves
+    else:
+        legal_moves = generate_legal_moves(board, to_move)
+
     if not legal_moves:
         return evaluator(board, root_player), None
 
-    legal_moves = _ordered_moves(board, to_move, legal_moves)
+    legal_moves = _ordered_moves(board, to_move, legal_moves, tt_move, killer_moves, depth)
     maximizing = to_move == root_player
     opponent = _opponent(to_move)
     best_move = None
@@ -130,10 +189,9 @@ def _minimax(
         best_value = -inf
         for move in legal_moves:
             _check_deadline(deadline_at)
-            child = board.copy()
-            child.apply_move(move, to_move)
+            undo_info = board.apply_move_undo(move, to_move)
             value, _ = _minimax(
-                child,
+                board,
                 opponent,
                 root_player,
                 depth - 1,
@@ -143,39 +201,56 @@ def _minimax(
                 tie_break,
                 deadline_at,
                 stats,
+                tt,
+                killer_moves,
             )
+            board.undo_move(undo_info)
             if value > best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
                 best_value = value
                 best_move = move
             alpha = max(alpha, best_value)
             if beta <= alpha:
+                # Record killer move on cutoff
+                if depth < len(killer_moves):
+                    killer_moves[depth] = move
                 break
-        return best_value, best_move
+    else:
+        best_value = inf
+        for move in legal_moves:
+            _check_deadline(deadline_at)
+            undo_info = board.apply_move_undo(move, to_move)
+            value, _ = _minimax(
+                board,
+                opponent,
+                root_player,
+                depth - 1,
+                alpha,
+                beta,
+                evaluator,
+                tie_break,
+                deadline_at,
+                stats,
+                tt,
+                killer_moves,
+            )
+            board.undo_move(undo_info)
+            if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
+                best_value = value
+                best_move = move
+            beta = min(beta, best_value)
+            if beta <= alpha:
+                if depth < len(killer_moves):
+                    killer_moves[depth] = move
+                break
 
-    best_value = inf
-    for move in legal_moves:
-        _check_deadline(deadline_at)
-        child = board.copy()
-        child.apply_move(move, to_move)
-        value, _ = _minimax(
-            child,
-            opponent,
-            root_player,
-            depth - 1,
-            alpha,
-            beta,
-            evaluator,
-            tie_break,
-            deadline_at,
-            stats,
-        )
-        if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
-            best_value = value
-            best_move = move
-        beta = min(beta, best_value)
-        if beta <= alpha:
-            break
+    if best_value <= alpha_orig:
+        flag = UPPERBOUND
+    elif best_value >= beta_orig:
+        flag = LOWERBOUND
+    else:
+        flag = EXACT
 
+    tt[tt_key] = TTEntry(depth=depth, value=best_value, flag=flag, move=best_move)
     return best_value, best_move
 
 
@@ -225,8 +300,15 @@ def search_best_move(
     completed_depth = 0
     timed_out = False
 
+    # Shared across iterative deepening iterations
+    tt: Dict[int, TTEntry] = {}
+    killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
+
     for depth in range(1, requested_depth + 1):
         stats = {"nodes": 0}
+        # Reset killer moves each iteration (they're depth-relative)
+        for i in range(len(killer_moves)):
+            killer_moves[i] = None
         try:
             score, move = _minimax(
                 board,
@@ -239,6 +321,9 @@ def search_best_move(
                 resolved_config.tie_break,
                 deadline_at,
                 stats,
+                tt,
+                killer_moves,
+                root_legal_moves=legal_moves,
             )
         except _SearchTimeout:
             total_nodes += stats["nodes"]
