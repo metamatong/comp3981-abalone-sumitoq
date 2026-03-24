@@ -28,7 +28,7 @@ python3 run.py duel --black-ai default --white-ai cole --depth 2
 
 # One-agent gauntlet (two games vs every other agent, one per color)
 # Uses one worker per CPU by default; add --jobs 1 to force serial execution.
-# Progress updates are printed to stderr while games are running.
+# A live stderr progress line animates while games are running.
 python3 run.py duel --agent jonah --all-opponents --depth 2
 
 # One-agent gauntlet with an explicit worker count

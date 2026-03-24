@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -160,23 +161,35 @@ def _run_all_opponents_games(
         seed=seed,
     )
     worker_count = _resolve_worker_count(jobs, len(scheduled_games))
-    _print_gauntlet_start(agent_id, len(scheduled_games), worker_count)
+    progress = _GauntletProgressDisplay(
+        agent_id=agent_id,
+        game_count=len(scheduled_games),
+        worker_count=worker_count,
+    )
+    progress.start()
     if worker_count <= 1:
-        return _run_scheduled_games_serial(scheduled_games)
+        try:
+            return _run_scheduled_games_serial(scheduled_games, progress)
+        finally:
+            progress.finish()
 
     try:
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
             futures = [executor.submit(_run_all_opponents_game, job) for job in scheduled_games]
             games = []
-            started_at = time.perf_counter()
             for completed_count, future in enumerate(as_completed(futures), start=1):
                 game = future.result()
                 games.append(game)
-                _print_gauntlet_progress(completed_count, len(scheduled_games), started_at, game)
+                progress.update(completed_count, game)
     except (BrokenProcessPool, OSError) as exc:
-        _print_parallel_fallback_warning(exc)
-        _print_gauntlet_restart(len(scheduled_games))
-        return _run_scheduled_games_serial(scheduled_games)
+        progress.warn_parallel_unavailable(exc)
+        progress.restart_serial()
+        try:
+            return _run_scheduled_games_serial(scheduled_games, progress, reset=True)
+        finally:
+            progress.finish()
+    finally:
+        progress.finish()
     return sorted(games, key=lambda game: game["index"])
 
 
@@ -219,14 +232,145 @@ def _resolve_worker_count(jobs: Optional[int], game_count: int) -> int:
     return max(1, min(requested, game_count))
 
 
-def _run_scheduled_games_serial(scheduled_games: List[dict]) -> List[dict]:
+def _run_scheduled_games_serial(
+    scheduled_games: List[dict],
+    progress: "_GauntletProgressDisplay",
+    reset: bool = False,
+) -> List[dict]:
     games = []
-    started_at = time.perf_counter()
+    if reset:
+        progress.reset()
     for completed_count, job in enumerate(scheduled_games, start=1):
         game = _run_all_opponents_game(job)
         games.append(game)
-        _print_gauntlet_progress(completed_count, len(scheduled_games), started_at, game)
+        progress.update(completed_count, game)
     return games
+
+
+class _GauntletProgressDisplay:
+    _FRAMES = (
+        "B>------<W",
+        "-B>----<W-",
+        "--B>--<W--",
+        "---B><W---",
+        "--B>--<W--",
+        "-B>----<W-",
+    )
+
+    def __init__(
+        self,
+        agent_id: str,
+        game_count: int,
+        worker_count: int,
+        stream=None,
+        refresh_s: float = 0.12,
+    ):
+        self.agent_id = agent_id
+        self.game_count = game_count
+        self.worker_count = worker_count
+        self.stream = stream or sys.stderr
+        self.refresh_s = refresh_s
+        self.started_at = time.perf_counter()
+        self.completed = 0
+        self.latest_game: Optional[dict] = None
+        self._frame_index = 0
+        self._last_width = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._live = bool(getattr(self.stream, "isatty", lambda: False)())
+
+    def start(self) -> None:
+        if not self._live:
+            _print_gauntlet_start(self.agent_id, self.game_count, self.worker_count)
+            return
+
+        self._render_live_line()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+    def update(self, completed: int, game: dict) -> None:
+        if not self._live:
+            self.completed = completed
+            self.latest_game = game
+            _print_gauntlet_progress(self.completed, self.game_count, self.started_at, game)
+            return
+
+        with self._lock:
+            self.completed = completed
+            self.latest_game = game
+
+    def reset(self) -> None:
+        with self._lock:
+            self.started_at = time.perf_counter()
+            self.completed = 0
+            self.latest_game = None
+
+    def warn_parallel_unavailable(self, exc: BaseException) -> None:
+        self._message(
+            "Warning: parallel duel execution is unavailable "
+            f"({exc.__class__.__name__}: {exc}). Continuing serially."
+        )
+
+    def restart_serial(self) -> None:
+        self._message(f"[duel] Restarting gauntlet serially for {self.game_count} game(s).")
+
+    def finish(self) -> None:
+        if not self._live:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+
+    def _run_loop(self) -> None:
+        while not self._stop.wait(self.refresh_s):
+            self._render_live_line()
+        self._render_live_line()
+        print(file=self.stream, flush=True)
+
+    def _message(self, text: str) -> None:
+        if not self._live:
+            print(text, file=self.stream)
+            return
+
+        with self._lock:
+            self._clear_live_line()
+            print(text, file=self.stream, flush=True)
+
+    def _render_live_line(self) -> None:
+        with self._lock:
+            line = self._build_live_line()
+            padded = line.ljust(self._last_width)
+            print(f"\r{padded}", end="", file=self.stream, flush=True)
+            self._last_width = max(self._last_width, len(line))
+
+    def _clear_live_line(self) -> None:
+        if self._last_width <= 0:
+            return
+        print(f"\r{' ' * self._last_width}\r", end="", file=self.stream, flush=True)
+        self._last_width = 0
+
+    def _build_live_line(self) -> str:
+        frame = self._FRAMES[self._frame_index]
+        self._frame_index = (self._frame_index + 1) % len(self._FRAMES)
+        elapsed_s = max(0.0, time.perf_counter() - self.started_at)
+        remaining = max(0, self.game_count - self.completed)
+        avg_s = elapsed_s / self.completed if self.completed else 0.0
+        eta_s = avg_s * remaining
+        mode = "serial" if self.worker_count <= 1 else f"{self.worker_count} workers"
+        latest = "warming up..."
+        if self.latest_game is not None:
+            winner = self.latest_game["winner_ai_id"] or "draw"
+            latest = (
+                f"last={self.latest_game['black_ai_id']} vs {self.latest_game['white_ai_id']} "
+                f"-> {winner} ({self.latest_game['moves']}m)"
+            )
+        return (
+            f"[duel] {frame} {_progress_bar(self.completed, self.game_count)} "
+            f"{self.completed}/{self.game_count} elapsed={_format_duration(elapsed_s)} "
+            f"eta={_format_duration(eta_s)} mode={mode} {latest}"
+        )
 
 
 def _print_gauntlet_start(agent_id: str, game_count: int, worker_count: int) -> None:
