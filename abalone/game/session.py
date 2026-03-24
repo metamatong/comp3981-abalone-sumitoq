@@ -229,6 +229,7 @@ class GameSession:
         agent_label: Optional[str] = None,
     ) -> dict:
         """Apply a validated move, record history entry, and advance the turn."""
+        self._tick_clock()
         player = self.current_player
         snapshot = self.board.copy()
         clock_snapshot = dict(self.time_left_ms)
