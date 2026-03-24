@@ -1,10 +1,9 @@
 """Heuristic feature helpers and weighted evaluation functions for minimax."""
 
 from collections import deque
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Set
 
-from ..game.board import BLACK, WHITE, Board, DIRECTIONS, Move, is_valid
-from ..state_space import generate_legal_moves
+from ..game.board import BLACK, WHITE, Board, DIRECTIONS, VALID_POSITIONS, is_valid, Position
 
 CENTER = (4, 5)
 
@@ -27,19 +26,16 @@ def _opponent(player: int) -> int:
     return WHITE if player == BLACK else BLACK
 
 
-def marble_advantage(board: Board, player: int) -> float:
+def marble_advantage(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
     """Difference in marble count."""
-    opp = _opponent(player)
-    return float(board.marble_count(player) - board.marble_count(opp))
+    return float(len(player_marbles) - len(opp_marbles))
 
 
-def center_control(board: Board, player: int) -> float:
+def center_control(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
     """Prefer marbles closer to center, squared to heavily penalize edges."""
-    opp = _opponent(player)
-
-    def dist_sum(color):
+    def dist_sum(marbles):
         total = 0
-        for r, c in board.get_marbles(color):
+        for r, c in marbles:
             dr, dc = r - CENTER[0], c - CENTER[1]
             if (dr >= 0 and dc >= 0) or (dr <= 0 and dc <= 0):
                 dist = max(abs(dr), abs(dc))
@@ -48,15 +44,12 @@ def center_control(board: Board, player: int) -> float:
             total += dist ** 2
         return total
 
-    return float(dist_sum(opp) - dist_sum(player))
+    return float(dist_sum(opp_marbles) - dist_sum(player_marbles))
 
 
-def cohesion(board: Board, player: int) -> float:
+def cohesion(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
     """Friendly adjacency count."""
-    opp = _opponent(player)
-
-    def adjacency(color):
-        marbles = set(board.get_marbles(color))
+    def adjacency(marbles):
         score = 0
         for r, c in marbles:
             for dr, dc in DIRECTIONS:
@@ -64,15 +57,12 @@ def cohesion(board: Board, player: int) -> float:
                     score += 1
         return score
 
-    return float(adjacency(player) - adjacency(opp))
+    return float(adjacency(player_marbles) - adjacency(opp_marbles))
 
 
-def largest_cluster(board: Board, player: int) -> float:
+def largest_cluster(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
     """Largest connected group size."""
-    opp = _opponent(player)
-
-    def cluster_size(color):
-        marbles = set(board.get_marbles(color))
+    def cluster_size(marbles):
         visited = set()
         largest = 0
 
@@ -98,16 +88,14 @@ def largest_cluster(board: Board, player: int) -> float:
 
         return largest
 
-    return float(cluster_size(player) - cluster_size(opp))
+    return float(cluster_size(player_marbles) - cluster_size(opp_marbles))
 
 
-def edge_risk(board: Board, player: int) -> float:
+def edge_risk(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
     """Penalize marbles near edges."""
-    opp = _opponent(player)
-
-    def risk(color):
+    def risk(marbles):
         score = 0
-        for r, c in board.get_marbles(color):
+        for r, c in marbles:
             edge_dist = 2
             for dr, dc in DIRECTIONS:
                 pos1 = (r + dr, c + dc)
@@ -125,17 +113,13 @@ def edge_risk(board: Board, player: int) -> float:
 
         return score
 
-    return float(risk(opp) - risk(player))
+    return float(risk(opp_marbles) - risk(player_marbles))
 
 
-def formation_strength(board: Board, player: int) -> float:
+def formation_strength(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
     """Inline formations useful for pushes."""
-    opp = _opponent(player)
-
-    def formation(color):
-        marbles = set(board.get_marbles(color))
+    def formation(marbles):
         score = 0
-
         for r, c in marbles:
             for dr, dc in DIRECTIONS:
                 m1 = (r + dr, c + dc)
@@ -146,43 +130,33 @@ def formation_strength(board: Board, player: int) -> float:
                         score += 3
         return score
 
-    return float(formation(player) - formation(opp))
+    return float(formation(player_marbles) - formation(opp_marbles))
 
 
-def push_potential(board: Board, player: int) -> float:
+def push_potential(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
     """Estimate potential pushes."""
-    opp = _opponent(player)
-
-    def pushes(color):
-        marbles = set(board.get_marbles(color))
-        opponent_marbles = set(board.get_marbles(_opponent(color)))
+    def pushes(marbles, opponent):
         score = 0
-
         for r, c in marbles:
             for dr, dc in DIRECTIONS:
                 m1 = (r + dr, c + dc)
                 if m1 in marbles:
                     m2 = (r + 2 * dr, c + 2 * dc)
-                    if m2 in opponent_marbles:
+                    if m2 in opponent:
                         score += 2
                     elif m2 in marbles:
                         m3 = (r + 3 * dr, c + 3 * dc)
-                        if m3 in opponent_marbles:
+                        if m3 in opponent:
                             score += 3
-
         return score
 
-    return float(pushes(player) - pushes(opp))
+    return float(pushes(player_marbles, opp_marbles) - pushes(opp_marbles, player_marbles))
 
 
-def threat_pressure(board: Board, player: int) -> float:
+def threat_pressure(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
     """Opponent marbles near edges under pressure."""
-    opp = _opponent(player)
-
-    def threats(color):
-        opponent = set(board.get_marbles(_opponent(color)))
+    def threats(opponent):
         score = 0
-
         for r, c in opponent:
             edge_dist = 2
             for dr, dc in DIRECTIONS:
@@ -199,22 +173,33 @@ def threat_pressure(board: Board, player: int) -> float:
 
         return score
 
-    return float(threats(player) - threats(opp))
+    return float(threats(opp_marbles) - threats(player_marbles))
 
 
-def mobility(player_moves: List[Move], opp_moves: List[Move]) -> float:
-    """Legal move difference."""
-    return float(len(player_moves) - len(opp_moves))
+def mobility(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
+    """Fast mobility approximation: count empty valid neighbors per marble.
 
+    This approximates true legal-move count at O(marbles × 6) instead of
+    the O(marbles² × directions) cost of full move generation.
+    """
+    all_occupied = player_marbles | opp_marbles
 
-def stability(board: Board, player: int) -> float:
-    """Pieces supported by friendly neighbors."""
-    opp = _opponent(player)
-
-    def stable(color):
-        marbles = set(board.get_marbles(color))
+    def freedom(marbles):
         count = 0
+        for r, c in marbles:
+            for dr, dc in DIRECTIONS:
+                nb = (r + dr, c + dc)
+                if nb in VALID_POSITIONS and nb not in all_occupied:
+                    count += 1
+        return count
 
+    return float(freedom(player_marbles) - freedom(opp_marbles))
+
+
+def stability(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
+    """Pieces supported by friendly neighbors."""
+    def stable(marbles):
+        count = 0
         for r, c in marbles:
             support = 0
             for dr, dc in DIRECTIONS:
@@ -222,30 +207,55 @@ def stability(board: Board, player: int) -> float:
                     support += 1
             if support >= 2:
                 count += 1
-
         return count
 
-    return float(stable(player) - stable(opp))
+    return float(stable(player_marbles) - stable(opp_marbles))
 
 
 def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) -> float:
     """Score a board using a weighted combination of shared heuristic features."""
     opp = _opponent(player)
-    player_moves = generate_legal_moves(board, player)
-    opp_moves = generate_legal_moves(board, opp)
 
-    return (
-        weights["marble"] * marble_advantage(board, player)
-        + weights["center"] * center_control(board, player)
-        + weights["cohesion"] * cohesion(board, player)
-        + weights["cluster"] * largest_cluster(board, player)
-        + weights["edge"] * edge_risk(board, player)
-        + weights["formation"] * formation_strength(board, player)
-        + weights["push"] * push_potential(board, player)
-        + weights["threat"] * threat_pressure(board, player)
-        + weights["mobility"] * mobility(player_moves, opp_moves)
-        + weights["stability"] * stability(board, player)
-    )
+    # Extract board marbles ONLY ONCE!
+    player_marbles_list = board.get_marbles(player)
+    opp_marbles_list = board.get_marbles(opp)
+
+    player_marbles_set = set(player_marbles_list)
+    opp_marbles_set = set(opp_marbles_list)
+
+    score = 0.0
+
+    if weights.get("marble", 0.0) != 0.0:
+        score += weights["marble"] * marble_advantage(player_marbles_list, opp_marbles_list)
+
+    if weights.get("center", 0.0) != 0.0:
+        score += weights["center"] * center_control(player_marbles_list, opp_marbles_list)
+
+    if weights.get("cohesion", 0.0) != 0.0:
+        score += weights["cohesion"] * cohesion(player_marbles_set, opp_marbles_set)
+
+    if weights.get("cluster", 0.0) != 0.0:
+        score += weights["cluster"] * largest_cluster(player_marbles_set, opp_marbles_set)
+
+    if weights.get("edge", 0.0) != 0.0:
+        score += weights["edge"] * edge_risk(player_marbles_list, opp_marbles_list)
+
+    if weights.get("formation", 0.0) != 0.0:
+        score += weights["formation"] * formation_strength(player_marbles_set, opp_marbles_set)
+
+    if weights.get("push", 0.0) != 0.0:
+        score += weights["push"] * push_potential(player_marbles_set, opp_marbles_set)
+
+    if weights.get("threat", 0.0) != 0.0:
+        score += weights["threat"] * threat_pressure(player_marbles_set, opp_marbles_set)
+
+    if weights.get("mobility", 0.0) != 0.0:
+        score += weights["mobility"] * mobility(player_marbles_set, opp_marbles_set)
+
+    if weights.get("stability", 0.0) != 0.0:
+        score += weights["stability"] * stability(player_marbles_set, opp_marbles_set)
+
+    return score
 
 
 def build_weighted_evaluator(weights: Dict[str, float]) -> Callable[[Board, int], float]:

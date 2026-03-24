@@ -18,6 +18,7 @@ Board layout:
             @ @ @ @ @           a
 """
 
+import random as _random
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 
@@ -72,6 +73,25 @@ def _build_valid_positions() -> Set[Position]:
 
 
 VALID_POSITIONS: Set[Position] = _build_valid_positions()
+
+
+# --- Zobrist Hashing ---
+# Pre-computed random numbers for incrementally-maintained board hashing.
+# keyed by (position, color) -> random 64-bit int.
+
+def _build_zobrist_table() -> Dict[Tuple[Position, int], int]:
+    """Build a deterministic Zobrist random table for all (position, color) pairs."""
+    rng = _random.Random(0xABA10E)  # fixed seed for determinism
+    table: Dict[Tuple[Position, int], int] = {}
+    for pos in sorted(VALID_POSITIONS):
+        for color in (BLACK, WHITE):
+            table[(pos, color)] = rng.getrandbits(64)
+    # Side-to-move keys
+    table[('side', BLACK)] = rng.getrandbits(64)
+    table[('side', WHITE)] = rng.getrandbits(64)
+    return table
+
+ZOBRIST: Dict = _build_zobrist_table()
 
 
 def pos_to_str(pos: Position) -> str:
@@ -196,6 +216,15 @@ class Board:
         """Initialize an empty board and zeroed capture score."""
         self.cells: Dict[Position, int] = {pos: EMPTY for pos in VALID_POSITIONS}
         self.score: Dict[int, int] = {BLACK: 0, WHITE: 0}
+        self.zhash: int = 0  # Zobrist hash maintained incrementally
+
+    def recompute_zhash(self):
+        """Recompute Zobrist hash from scratch (used after bulk setup)."""
+        h = 0
+        for pos, color in self.cells.items():
+            if color != EMPTY:
+                h ^= ZOBRIST[(pos, color)]
+        self.zhash = h
 
     def setup_standard(self):
         """Set marbles to the standard Abalone starting position."""
@@ -204,6 +233,7 @@ class Board:
             self.cells[pos] = BLACK
         for pos in STANDARD_WHITE:
             self.cells[pos] = WHITE
+        self.recompute_zhash()
 
     def setup_layout(self, name: str):
         """Set up board using a named layout."""
@@ -215,18 +245,21 @@ class Board:
             self.cells[pos] = BLACK
         for pos in white_positions:
             self.cells[pos] = WHITE
+        self.recompute_zhash()
 
     def clear(self):
         """Remove all marbles and reset scores."""
         for pos in VALID_POSITIONS:
             self.cells[pos] = EMPTY
         self.score = {BLACK: 0, WHITE: 0}
+        self.zhash = 0
 
     def copy(self) -> 'Board':
-        """Create a deep copy of board cells and score state."""
+        """Create a deep copy of board cells, score state, and Zobrist hash."""
         b = Board()
         b.cells = dict(self.cells)
         b.score = dict(self.score)
+        b.zhash = self.zhash
         return b
 
     def get(self, pos: Position) -> Optional[int]:
@@ -320,6 +353,11 @@ class Board:
 
     # --- Apply move ---
 
+    def _zhash_set(self, pos: Position, color: int):
+        """XOR a (pos, color) pair into the Zobrist hash."""
+        if color != EMPTY:
+            self.zhash ^= ZOBRIST[(pos, color)]
+
     def apply_move(self, move: Move, player: int) -> dict:
         """Apply move, mutating the board. Returns result info."""
         result = {'pushed': [], 'pushoff': False}
@@ -331,6 +369,92 @@ class Board:
             self._apply_broadside(move, player)
 
         return result
+
+    def apply_move_undo(self, move: Move, player: int) -> dict:
+        """Apply move and return an undo token for fast rollback in search.
+
+        The undo token captures all cell changes and score deltas so that
+        ``undo_move`` can restore the board without allocating a copy.
+        """
+        opponent = WHITE if player == BLACK else BLACK
+        # snapshot changes for undo
+        old_cells: List[Tuple[Position, int]] = []
+        old_score_player = self.score[player]
+        old_score_opponent = self.score[opponent]
+        old_zhash = self.zhash
+
+        d = move.direction
+        if move.is_inline:
+            _, leading = move.leading_trailing()
+            # Find pushed opponent marbles
+            pushed = []
+            pos = neighbor(leading, d)
+            while is_valid(pos) and self.cells[pos] == opponent:
+                pushed.append(pos)
+                pos = neighbor(pos, d)
+
+            # Handle push-off
+            pushoff = pushed and not is_valid(pos)
+            if pushoff:
+                self.score[player] += 1
+
+            # Move pushed (farthest first)
+            for i in range(len(pushed) - 1, -1, -1):
+                p = pushed[i]
+                old_cells.append((p, self.cells[p]))
+                self._zhash_set(p, self.cells[p])  # remove old
+                dest = neighbor(p, d)
+                if is_valid(dest):
+                    old_cells.append((dest, self.cells[dest]))
+                    self.cells[dest] = opponent
+                    self._zhash_set(dest, opponent)  # add new
+                self.cells[p] = EMPTY
+
+            # Move own marbles (leading first)
+            sorted_by_dir = sorted(
+                move.marbles,
+                key=lambda m: m[0] * d[0] + m[1] * d[1],
+                reverse=True
+            )
+            for marble in sorted_by_dir:
+                old_cells.append((marble, self.cells[marble]))
+                self._zhash_set(marble, self.cells[marble])  # remove old
+                dest = neighbor(marble, d)
+                old_cells.append((dest, self.cells[dest]))
+                self.cells[dest] = player
+                self._zhash_set(dest, player)  # add new
+                self.cells[marble] = EMPTY
+        else:
+            # Broadside
+            for m in move.marbles:
+                old_cells.append((m, self.cells[m]))
+                self._zhash_set(m, self.cells[m])  # remove old
+                self.cells[m] = EMPTY
+            for m in move.marbles:
+                dest = neighbor(m, d)
+                old_cells.append((dest, self.cells[dest]))
+                self.cells[dest] = player
+                self._zhash_set(dest, player)  # add new
+
+        return {
+            'old_cells': old_cells,
+            'player': player,
+            'opponent': opponent,
+            'old_score_p': old_score_player,
+            'old_score_o': old_score_opponent,
+            'old_zhash': old_zhash,
+        }
+
+    def undo_move(self, undo_info: dict):
+        """Restore board from undo token produced by apply_move_undo."""
+        player = undo_info['player']
+        opponent = undo_info['opponent']
+        # Restore cells in reverse order
+        for pos, val in reversed(undo_info['old_cells']):
+            self.cells[pos] = val
+        self.score[player] = undo_info['old_score_p']
+        self.score[opponent] = undo_info['old_score_o']
+        self.zhash = undo_info['old_zhash']
 
     def _apply_inline(self, move: Move, player: int, opponent: int, result: dict):
         """Apply an inline move, including pushes and potential push-off scoring."""
@@ -354,11 +478,14 @@ class Board:
 
         # Move pushed opponent marbles (farthest first)
         for i in range(len(pushed) - 1, -1, -1):
-            dest = neighbor(pushed[i], d)
+            p = pushed[i]
+            self._zhash_set(p, self.cells[p])
+            dest = neighbor(p, d)
             if is_valid(dest):
+                self._zhash_set(dest, self.cells[dest])
                 self.cells[dest] = opponent
-            # else: pushed off, marble lost
-            self.cells[pushed[i]] = EMPTY
+                self._zhash_set(dest, opponent)
+            self.cells[p] = EMPTY
 
         # Move own marbles (leading first to avoid overwriting)
         sorted_by_dir = sorted(
@@ -367,8 +494,11 @@ class Board:
             reverse=True
         )
         for marble in sorted_by_dir:
+            self._zhash_set(marble, self.cells[marble])
             dest = neighbor(marble, d)
+            self._zhash_set(dest, self.cells[dest])
             self.cells[dest] = player
+            self._zhash_set(dest, player)
             self.cells[marble] = EMPTY
 
     def _apply_broadside(self, move: Move, player: int):
@@ -376,9 +506,12 @@ class Board:
         d = move.direction
         # Clear old, set new (safe because broadside dests are always empty)
         for m in move.marbles:
+            self._zhash_set(m, self.cells[m])
             self.cells[m] = EMPTY
         for m in move.marbles:
-            self.cells[neighbor(m, d)] = player
+            dest = neighbor(m, d)
+            self.cells[dest] = player
+            self._zhash_set(dest, player)
 
     # --- Display ---
 

@@ -191,6 +191,7 @@ def load_position_list_state(text: str) -> Tuple[Board, int]:
         BLACK: INITIAL_MARBLES_PER_PLAYER - white_count,
         WHITE: INITIAL_MARBLES_PER_PLAYER - black_count,
     }
+    board.recompute_zhash()
     player = BLACK if turn == "b" else WHITE
     return board, player
 
