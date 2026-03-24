@@ -27,7 +27,11 @@ python3 run.py match --black-ai default --white-ai cole --rounds 3 --depth 2 --s
 python3 run.py duel --black-ai default --white-ai cole --depth 2
 
 # One-agent gauntlet (two games vs every other agent, one per color)
+# Uses one worker per CPU by default; add --jobs 1 to force serial execution.
 python3 run.py duel --agent jonah --all-opponents --depth 2
+
+# One-agent gauntlet with an explicit worker count
+python3 run.py duel --agent jonah --all-opponents --depth 2 --jobs 4
 
 # State-space analysis
 python3 run.py state

@@ -1,7 +1,11 @@
 """AI-vs-AI duel runners with single and one-vs-all reporting modes."""
 
 import argparse
+import os
+import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Dict, List, Optional
 
 from .board import BLACK, WHITE
@@ -36,6 +40,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--move-time-s", type=int, default=30, help="Per-turn time limit for both players.")
     parser.add_argument("--max-moves", type=int, default=500, help="Maximum moves before draw/tiebreak.")
     parser.add_argument("--seed", type=int, default=0, help="Seed for the opening random black move.")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Worker process count for --all-opponents. Defaults to CPU count; use 1 for serial execution.",
+    )
     return parser
 
 
@@ -139,39 +149,99 @@ def _run_all_opponents_games(
     move_time_s: int,
     max_moves: int,
     seed: int,
+    jobs: Optional[int],
+) -> List[dict]:
+    scheduled_games = _build_all_opponents_jobs(
+        agent_id=agent_id,
+        depth=depth,
+        layout=layout,
+        move_time_s=move_time_s,
+        max_moves=max_moves,
+        seed=seed,
+    )
+    worker_count = _resolve_worker_count(jobs, len(scheduled_games))
+    if worker_count <= 1:
+        return [_run_all_opponents_game(job) for job in scheduled_games]
+
+    try:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            games = list(executor.map(_run_all_opponents_game, scheduled_games))
+    except (BrokenProcessPool, OSError) as exc:
+        _print_parallel_fallback_warning(exc)
+        return [_run_all_opponents_game(job) for job in scheduled_games]
+    return sorted(games, key=lambda game: game["index"])
+
+
+def _build_all_opponents_jobs(
+    agent_id: str,
+    depth: Optional[int],
+    layout: str,
+    move_time_s: int,
+    max_moves: int,
+    seed: int,
 ) -> List[dict]:
     opponents = [agent.id for agent in list_agents() if agent.id != agent_id]
-    games: List[dict] = []
+    jobs: List[dict] = []
     game_offset = 0
 
     for opponent_id in opponents:
         for black_ai_id, white_ai_id in ((agent_id, opponent_id), (opponent_id, agent_id)):
-            start_time = time.perf_counter()
-            session = _run_game(
-                black_ai_id=black_ai_id,
-                white_ai_id=white_ai_id,
-                depth=depth,
-                layout=layout,
-                move_time_s=move_time_s,
-                max_moves=max_moves,
-                opening_seed=seed + game_offset,
-            )
-            elapsed_s = time.perf_counter() - start_time
-            status = session.status()
-            games.append(
+            jobs.append(
                 {
+                    "index": len(jobs),
                     "black_ai_id": black_ai_id,
                     "white_ai_id": white_ai_id,
-                    "winner_ai_id": _winner_agent_id(status.get("winner"), black_ai_id, white_ai_id),
-                    "score": dict(session.board.score),
-                    "moves": len(session.move_history),
-                    "duration_s": elapsed_s,
+                    "depth": depth,
+                    "layout": layout,
+                    "move_time_s": move_time_s,
+                    "max_moves": max_moves,
+                    "opening_seed": seed + game_offset,
                     "agent_color": "black" if black_ai_id == agent_id else "white",
                 }
             )
             game_offset += 1
 
-    return games
+    return jobs
+
+
+def _resolve_worker_count(jobs: Optional[int], game_count: int) -> int:
+    if game_count <= 0:
+        return 0
+    requested = jobs if jobs is not None else (os.cpu_count() or 1)
+    return max(1, min(requested, game_count))
+
+
+def _print_parallel_fallback_warning(exc: BaseException) -> None:
+    print(
+        "Warning: parallel duel execution is unavailable "
+        f"({exc.__class__.__name__}: {exc}). Continuing serially.",
+        file=sys.stderr,
+    )
+
+
+def _run_all_opponents_game(job: dict) -> dict:
+    start_time = time.perf_counter()
+    session = _run_game(
+        black_ai_id=job["black_ai_id"],
+        white_ai_id=job["white_ai_id"],
+        depth=job["depth"],
+        layout=job["layout"],
+        move_time_s=job["move_time_s"],
+        max_moves=job["max_moves"],
+        opening_seed=job["opening_seed"],
+    )
+    elapsed_s = time.perf_counter() - start_time
+    status = session.status()
+    return {
+        "index": job["index"],
+        "black_ai_id": job["black_ai_id"],
+        "white_ai_id": job["white_ai_id"],
+        "winner_ai_id": _winner_agent_id(status.get("winner"), job["black_ai_id"], job["white_ai_id"]),
+        "score": dict(session.board.score),
+        "moves": len(session.move_history),
+        "duration_s": elapsed_s,
+        "agent_color": job["agent_color"],
+    }
 
 
 def _format_rate(numerator: int, denominator: int) -> str:
@@ -239,6 +309,8 @@ def _print_all_opponents_report(agent_id: str, games: List[dict]) -> None:
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.depth is not None and (args.depth < 1 or args.depth > 5):
         parser.error("--depth must be between 1 and 5")
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be >= 1")
 
     if args.all_opponents:
         if not args.agent:
@@ -253,6 +325,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error(str(exc))
         return
 
+    if args.jobs is not None:
+        parser.error("--jobs can only be used with --all-opponents")
     if args.agent:
         parser.error("--agent can only be used with --all-opponents")
     if not args.black_ai or not args.white_ai:
@@ -278,6 +352,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             move_time_s=args.move_time_s,
             max_moves=args.max_moves,
             seed=args.seed,
+            jobs=args.jobs,
         )
         _print_all_opponents_report(args.agent, games)
         return
