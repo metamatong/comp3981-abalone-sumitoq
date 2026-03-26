@@ -1,7 +1,7 @@
 """Heuristic feature helpers and weighted evaluation functions for minimax."""
 
 from collections import deque
-from typing import Callable, Dict, List, Set
+from typing import Callable, Dict, List, Set, Tuple
 
 from ..game.board import BLACK, WHITE, Board, DIRECTIONS, VALID_POSITIONS, is_valid, Position
 
@@ -13,13 +13,14 @@ DEFAULT_WEIGHTS = {
     "center": 40.0,      # proximity of own marbles to board center (lower squared distance = better)
     "cohesion": 35.0,    # total friendly adjacency count (tight groups are harder to push off)
     "cluster": 30.0,     # size of largest connected friendly group (encourages staying together)
-    "edge": 60.0,        # penalizes own marbles near the board edge (high push-off risk)
+    "edge_pressure": 70.0,  # combined own edge exposure and opponent rim pressure from one shared scan
     "formation": 50.0,   # inline 2- and 3-marble formations (prerequisite for push moves)
     "push": 120.0,       # estimated push opportunities against opponent (most actionable threat)
-    "threat": 80.0,      # opponent marbles near edges under friendly pressure (imminent capture)
     "mobility": 20.0,    # difference in legal move count (more options = better flexibility)
     "stability": 25.0,   # marbles with >=2 friendly neighbors (well-supported, harder to isolate)
 }
+
+SUPPORTED_WEIGHT_KEYS = frozenset(DEFAULT_WEIGHTS.keys())
 
 
 def _opponent(player: int) -> int:
@@ -91,29 +92,37 @@ def largest_cluster(player_marbles: Set[Position], opp_marbles: Set[Position]) -
     return float(cluster_size(player_marbles) - cluster_size(opp_marbles))
 
 
-def edge_risk(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
-    """Penalize marbles near edges."""
-    def risk(marbles):
-        score = 0
-        for r, c in marbles:
-            edge_dist = 2
-            for dr, dc in DIRECTIONS:
-                pos1 = (r + dr, c + dc)
-                if not is_valid(pos1):
-                    edge_dist = 0
-                    break
-                pos2 = (pos1[0] + dr, pos1[1] + dc)
-                if not is_valid(pos2):
-                    edge_dist = min(edge_dist, 1)
+def _edge_profile(marbles: List[Position]) -> Tuple[int, int]:
+    """Return combined edge-risk and rim-pressure points from one pass."""
+    risk_points = 0
+    pressure_points = 0
 
-            if edge_dist == 0:
-                score += 2
-            elif edge_dist == 1:
-                score += 1
+    for r, c in marbles:
+        edge_dist = 2
+        for dr, dc in DIRECTIONS:
+            pos1 = (r + dr, c + dc)
+            if not is_valid(pos1):
+                edge_dist = 0
+                break
+            pos2 = (pos1[0] + dr, pos1[1] + dc)
+            if not is_valid(pos2):
+                edge_dist = min(edge_dist, 1)
 
-        return score
+        if edge_dist == 0:
+            risk_points += 2
+            pressure_points += 1
+        elif edge_dist == 1:
+            risk_points += 1
+            pressure_points += 1
 
-    return float(risk(opp_marbles) - risk(player_marbles))
+    return risk_points, pressure_points
+
+
+def edge_pressure(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
+    """Combine own edge exposure and opponent rim pressure from one shared scan."""
+    player_risk, player_pressure = _edge_profile(player_marbles)
+    opp_risk, opp_pressure = _edge_profile(opp_marbles)
+    return float((opp_risk + opp_pressure) - (player_risk + player_pressure))
 
 
 def formation_strength(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
@@ -151,29 +160,6 @@ def push_potential(player_marbles: Set[Position], opp_marbles: Set[Position]) ->
         return score
 
     return float(pushes(player_marbles, opp_marbles) - pushes(opp_marbles, player_marbles))
-
-
-def threat_pressure(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
-    """Opponent marbles near edges under pressure."""
-    def threats(opponent):
-        score = 0
-        for r, c in opponent:
-            edge_dist = 2
-            for dr, dc in DIRECTIONS:
-                pos1 = (r + dr, c + dc)
-                if not is_valid(pos1):
-                    edge_dist = 0
-                    break
-                pos2 = (pos1[0] + dr, pos1[1] + dc)
-                if not is_valid(pos2):
-                    edge_dist = min(edge_dist, 1)
-
-            if edge_dist <= 1:
-                score += 1
-
-        return score
-
-    return float(threats(opp_marbles) - threats(player_marbles))
 
 
 def mobility(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
@@ -237,17 +223,14 @@ def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) 
     if weights.get("cluster", 0.0) != 0.0:
         score += weights["cluster"] * largest_cluster(player_marbles_set, opp_marbles_set)
 
-    if weights.get("edge", 0.0) != 0.0:
-        score += weights["edge"] * edge_risk(player_marbles_list, opp_marbles_list)
+    if weights.get("edge_pressure", 0.0) != 0.0:
+        score += weights["edge_pressure"] * edge_pressure(player_marbles_list, opp_marbles_list)
 
     if weights.get("formation", 0.0) != 0.0:
         score += weights["formation"] * formation_strength(player_marbles_set, opp_marbles_set)
 
     if weights.get("push", 0.0) != 0.0:
         score += weights["push"] * push_potential(player_marbles_set, opp_marbles_set)
-
-    if weights.get("threat", 0.0) != 0.0:
-        score += weights["threat"] * threat_pressure(player_marbles_set, opp_marbles_set)
 
     if weights.get("mobility", 0.0) != 0.0:
         score += weights["mobility"] * mobility(player_marbles_set, opp_marbles_set)
@@ -261,6 +244,10 @@ def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) 
 def build_weighted_evaluator(weights: Dict[str, float]) -> Callable[[Board, int], float]:
     """Create an evaluator callable from a shared weight dictionary."""
     resolved = dict(weights)
+    unknown_keys = sorted(key for key in resolved if key not in SUPPORTED_WEIGHT_KEYS)
+    if unknown_keys:
+        joined = ", ".join(unknown_keys)
+        raise ValueError(f"Unsupported heuristic weight key(s): {joined}")
 
     def evaluator(board: Board, player: int) -> float:
         return evaluate_with_weights(board, player, resolved)
