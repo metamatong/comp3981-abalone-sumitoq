@@ -443,13 +443,21 @@ function gameOverText() {
         if (state.winner == null) {
             return {
                 title: 'Draw!',
-                reason: `Max moves reached. Score tied.`,
-                banner: `Draw: max moves reached with tied score.`,
+                reason: `Max moves reached. Score and total time used tied.`,
+                banner: `Draw: max moves reached with tied score and tied total time.`,
                 cls: 'max_moves',
             };
         }
         const winner = winnerPlayer();
         const winnerName = winner === BLACK ? 'Black' : 'White';
+        if (state.winner_tiebreak === 'least_total_time') {
+            return {
+                title: `${winnerName} Wins!`,
+                reason: `Max moves reached. Score tied, so ${winnerName} won on total time used.`,
+                banner: `${winnerName} wins on total-time tiebreak after max moves.`,
+                cls: 'max_moves',
+            };
+        }
         return {
             title: `${winnerName} Wins!`,
             reason: `Max moves reached. ${winnerName} captured more.`,
@@ -462,13 +470,21 @@ function gameOverText() {
         if (state.winner == null) {
             return {
                 title: 'Draw!',
-                reason: `Game time expired. Score tied.`,
-                banner: `Draw: game time expired with tied score.`,
+                reason: `Game time expired. Score and total time used tied.`,
+                banner: `Draw: game time expired with tied score and tied total time.`,
                 cls: 'timeout',
             };
         }
         const winner = winnerPlayer();
         const winnerName = winner === BLACK ? 'Black' : 'White';
+        if (state.winner_tiebreak === 'least_total_time') {
+            return {
+                title: `${winnerName} Wins!`,
+                reason: `Game time expired. Score tied, so ${winnerName} won on total time used.`,
+                banner: `${winnerName} wins on total-time tiebreak after timeout.`,
+                cls: 'timeout',
+            };
+        }
         return {
             title: `${winnerName} Wins!`,
             reason: `Game time expired. ${winnerName} captured more.`,
@@ -513,6 +529,11 @@ function formatClock(ms) {
     const mins = Math.floor(total / 60);
     const secs = total % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function getTimeUsedLabel(player) {
+    const key = String(player);
+    return formatClock(state?.time_used_ms?.[key] ?? 0);
 }
 
 function renderGameTimer() {
@@ -849,7 +870,9 @@ function showGameOver() {
     const msg = gameOverText();
     document.getElementById('go-title').textContent = msg.title;
     document.getElementById('go-reason').textContent = msg.reason;
-    document.getElementById('go-sub').textContent = `Score: ${state.score['1']} – ${state.score['2']}`;
+    document.getElementById('go-sub').textContent =
+        `Score: ${state.score['1']} – ${state.score['2']} | ` +
+        `Time used: Black ${getTimeUsedLabel(BLACK)}, White ${getTimeUsedLabel(WHITE)}`;
     document.getElementById('game-over').classList.add('show');
 }
 

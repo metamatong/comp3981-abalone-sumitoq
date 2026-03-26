@@ -112,7 +112,46 @@ class Game:
 
         print(self.board.display())
         status = self.session.status()
+        self._print_game_over(status)
+
+    def is_game_over(self) -> bool:
+        """Return whether the game has ended."""
+        return self.session.status()["game_over"]
+
+    @staticmethod
+    def _format_elapsed_ms(ms: int) -> str:
+        """Format elapsed milliseconds as MM:SS for endgame reporting."""
+        total_seconds = max(0, ms) // 1000
+        minutes, seconds = divmod(total_seconds, 60)
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _print_game_over(self, status: dict) -> None:
+        """Print endgame summary with timeout/max-moves tiebreak details."""
         winner = status["winner"]
+        reason = status.get("game_over_reason")
+        winner_tiebreak = status.get("winner_tiebreak")
+        time_used_ms = status.get("time_used_ms", {BLACK: 0, WHITE: 0})
+
+        if reason in {"timeout", "max_moves"}:
+            reason_label = "game time expired" if reason == "timeout" else "max moves reached"
+            if winner is None:
+                print(f"  GAME OVER! Draw after {reason_label}.")
+                print("  Score and total time used were tied.")
+            else:
+                wname = "Black(@)" if winner == BLACK else "White(O)"
+                if winner_tiebreak == "least_total_time":
+                    print(f"  GAME OVER! {wname} wins on total-time tiebreak.")
+                    print(f"  {reason_label.capitalize()} with tied score, so least total time used decided the winner.")
+                else:
+                    print(f"  GAME OVER! {wname} wins when {reason_label}.")
+            print(f"  Final score: Black {self.board.score[BLACK]} - {self.board.score[WHITE]} White")
+            print(
+                "  Total time used: "
+                f"Black {self._format_elapsed_ms(time_used_ms[BLACK])} - "
+                f"White {self._format_elapsed_ms(time_used_ms[WHITE])}"
+            )
+            return
+
         if winner is None:
             print("  GAME OVER! No winner.")
             return
@@ -120,10 +159,6 @@ class Game:
         wname = "Black(@)" if winner == BLACK else "White(O)"
         print(f"  GAME OVER! {wname} wins!")
         print(f"  Final score: Black {self.board.score[BLACK]} - {self.board.score[WHITE]} White")
-
-    def is_game_over(self) -> bool:
-        """Return whether the game has ended."""
-        return self.session.status()["game_over"]
 
     def _get_move(self) -> Optional[Move]:
         """Read user input, execute meta-commands, and parse a move if provided."""

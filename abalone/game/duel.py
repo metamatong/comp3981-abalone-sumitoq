@@ -125,7 +125,7 @@ def _winner_agent_id(winner: Optional[int], black_ai_id: str, white_ai_id: str) 
 def _print_single_game_report(session: GameSession, black_agent, white_agent) -> None:
     status = session.status()
     score = dict(session.board.score)
-    totals = _total_time_by_player(session.move_history)
+    totals = status.get("time_used_ms", {BLACK: 0, WHITE: 0})
     total_moves = len(session.move_history)
 
     winner = _winner_label(status.get("winner"))
@@ -138,6 +138,8 @@ def _print_single_game_report(session: GameSession, black_agent, white_agent) ->
         f"black {totals[BLACK] / 1000.0:.2f}s, "
         f"white {totals[WHITE] / 1000.0:.2f}s"
     )
+    if status.get("winner_tiebreak") == "least_total_time":
+        print("Tiebreak: lower total time used")
     print("Heuristic weights:")
     print(f"Black {black_agent.id} ({black_agent.label}): {_format_weights(black_agent)}")
     print(f"White {white_agent.id} ({white_agent.label}): {_format_weights(white_agent)}")
@@ -449,6 +451,9 @@ def _run_all_opponents_game(job: dict) -> dict:
         "black_ai_id": job["black_ai_id"],
         "white_ai_id": job["white_ai_id"],
         "winner_ai_id": _winner_agent_id(status.get("winner"), job["black_ai_id"], job["white_ai_id"]),
+        "winner_tiebreak": status.get("winner_tiebreak"),
+        "game_over_reason": status.get("game_over_reason"),
+        "time_used_ms": status.get("time_used_ms", {BLACK: 0, WHITE: 0}),
         "score": dict(session.board.score),
         "moves": len(session.move_history),
         "duration_s": elapsed_s,
@@ -503,10 +508,12 @@ def _print_all_opponents_report(agent_id: str, games: List[dict]) -> None:
             losses += 1
             winner_label = winner_ai_id
 
+        time_used_ms = game.get("time_used_ms", {BLACK: 0, WHITE: 0})
         print(
             f"Game {index} ({duration_s:.1f}s, {moves} moves): "
             f"{black_ai_id} (black) vs {white_ai_id} (white) -> "
-            f"{winner_label} ({black_score}-{white_score})"
+            f"{winner_label} ({black_score}-{white_score}, "
+            f"{time_used_ms[BLACK] / 1000.0:.2f}s-{time_used_ms[WHITE] / 1000.0:.2f}s)"
         )
 
     print()

@@ -34,6 +34,7 @@ class GameSession:
         self.current_player = BLACK
         self.move_history: List[dict] = []
         self.time_left_us = {BLACK: self.initial_time_ms * 1000, WHITE: self.initial_time_ms * 1000}
+        self.time_used_us = {BLACK: 0, WHITE: 0}
         self.last_clock_update_us = self._now_us()
         self.turn_start_us = self._now_us()
         self.turn_start_epoch_ms = int(time.time() * 1000)
@@ -65,65 +66,67 @@ class GameSession:
         """Return current monotonic time in microseconds."""
         return time.perf_counter_ns() // 1000
 
+    def _time_used_ms(self) -> Dict[int, int]:
+        """Return total cumulative time used by each player in milliseconds."""
+        return {
+            BLACK: self.time_used_us[BLACK] // 1000,
+            WHITE: self.time_used_us[WHITE] // 1000,
+        }
+
+    def _winner_by_score_then_time(self) -> tuple[Optional[int], Optional[str]]:
+        """Resolve terminal winner by score first, then least total time used."""
+        if self.board.score[BLACK] > self.board.score[WHITE]:
+            return BLACK, None
+        if self.board.score[WHITE] > self.board.score[BLACK]:
+            return WHITE, None
+
+        if self.time_used_us[BLACK] < self.time_used_us[WHITE]:
+            return BLACK, "least_total_time"
+        if self.time_used_us[WHITE] < self.time_used_us[BLACK]:
+            return WHITE, "least_total_time"
+
+        return None, None
+
+    def _status_payload(
+        self,
+        game_over: bool,
+        winner: Optional[int],
+        game_over_reason: Optional[str],
+        winner_tiebreak: Optional[str] = None,
+    ) -> dict:
+        """Build a consistent status payload including additive timing fields."""
+        return {
+            "game_over": game_over,
+            "winner": winner,
+            "game_over_reason": game_over_reason,
+            "winner_tiebreak": winner_tiebreak,
+            "time_used_ms": self._time_used_ms(),
+        }
+
     def _status(self) -> dict:
         """Compute terminal status metadata without mutating session state."""
         # Check resign first
         if self._resigned:
-            return {
-                "game_over": True,
-                "winner": self._resign_winner,
-                "game_over_reason": "resign",
-            }
+            return self._status_payload(True, self._resign_winner, "resign")
 
         if self.board.score[BLACK] >= 6:
-            return {
-                "game_over": True,
-                "winner": BLACK,
-                "game_over_reason": "score",
-            }
+            return self._status_payload(True, BLACK, "score")
 
         if self.board.score[WHITE] >= 6:
-            return {
-                "game_over": True,
-                "winner": WHITE,
-                "game_over_reason": "score",
-            }
+            return self._status_payload(True, WHITE, "score")
 
         # Timeout: shared game time expired (sum of both clocks)
         total_time_left = self.time_left_us[BLACK] + self.time_left_us[WHITE]
         if total_time_left <= 0:
-            if self.board.score[BLACK] > self.board.score[WHITE]:
-                winner = BLACK
-            elif self.board.score[WHITE] > self.board.score[BLACK]:
-                winner = WHITE
-            else:
-                winner = None  # draw
-            return {
-                "game_over": True,
-                "winner": winner,
-                "game_over_reason": "timeout",
-            }
+            winner, winner_tiebreak = self._winner_by_score_then_time()
+            return self._status_payload(True, winner, "timeout", winner_tiebreak)
 
         # Max moves check
         if self.config.max_moves > 0 and len(self.move_history) >= self.config.max_moves:
-            # Winner is the player who captured more marbles
-            if self.board.score[BLACK] > self.board.score[WHITE]:
-                winner = BLACK
-            elif self.board.score[WHITE] > self.board.score[BLACK]:
-                winner = WHITE
-            else:
-                winner = None  # draw
-            return {
-                "game_over": True,
-                "winner": winner,
-                "game_over_reason": "max_moves",
-            }
+            winner, winner_tiebreak = self._winner_by_score_then_time()
+            return self._status_payload(True, winner, "max_moves", winner_tiebreak)
 
-        return {
-            "game_over": False,
-            "winner": None,
-            "game_over_reason": None,
-        }
+        return self._status_payload(False, None, None)
 
     def _tick_clock(self):
         """Update active player's remaining time based on elapsed monotonic time."""
@@ -134,6 +137,7 @@ class GameSession:
 
         elapsed = max(0, now - self.last_clock_update_us)
         if elapsed > 0:
+            self.time_used_us[self.current_player] += elapsed
             self.time_left_us[self.current_player] = max(0, self.time_left_us[self.current_player] - elapsed)
 
         self.last_clock_update_us = now
@@ -238,6 +242,7 @@ class GameSession:
         player = self.current_player
         snapshot = self.board.copy()
         clock_snapshot = dict(self.time_left_us)
+        time_used_snapshot = dict(self.time_used_us)
 
         now = self._now_us()
         duration_ms = max(0, now - self.turn_start_us) // 1000
@@ -251,6 +256,7 @@ class GameSession:
                 "moved_to": moved_to,
                 "snapshot": snapshot,
                 "clock_snapshot": clock_snapshot,
+                "time_used_snapshot": time_used_snapshot,
                 "player": player,
                 "source": source,
                 "search": search,
@@ -377,6 +383,7 @@ class GameSession:
         self.board = entry["snapshot"]
         self.current_player = entry["player"]
         self.time_left_us = dict(entry["clock_snapshot"])
+        self.time_used_us = dict(entry.get("time_used_snapshot", {BLACK: 0, WHITE: 0}))
         now = self._now_us()
         self.last_clock_update_us = now
         self.turn_start_us = now
@@ -395,6 +402,7 @@ class GameSession:
         game_time = self.config.game_time_ms if self.config.game_time_ms > 0 else self.initial_time_ms
         per_player_time_us = (game_time // 2) * 1000
         self.time_left_us = {BLACK: per_player_time_us, WHITE: per_player_time_us}
+        self.time_used_us = {BLACK: 0, WHITE: 0}
 
         now = self._now_us()
         self.last_clock_update_us = now
@@ -500,6 +508,7 @@ class GameSession:
             "game_over": status["game_over"],
             "winner": status["winner"],
             "game_over_reason": status["game_over_reason"],
+            "winner_tiebreak": status["winner_tiebreak"],
             "legal_moves": legal_list,
             "history": history,
             "last_move_marbles": last_move_marbles,
@@ -512,6 +521,7 @@ class GameSession:
                 BLACK: self.time_left_us[BLACK] // 1000,
                 WHITE: self.time_left_us[WHITE] // 1000,
             },
+            "time_used_ms": status["time_used_ms"],
             "paused": self.paused,
             "initial_time_ms": self.initial_time_ms,
             "turn_start_ms": self.turn_start_epoch_ms,

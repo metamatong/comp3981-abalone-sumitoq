@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from abalone.game import duel
+from abalone.players.registry import get_agent
 
 
 class _FakeExecutor:
@@ -37,6 +38,49 @@ class _BrokenExecutor(_FakeExecutor):
 
 
 class DuelTests(unittest.TestCase):
+    def test_single_game_report_mentions_total_time_tiebreak(self):
+        session = mock.Mock()
+        session.board.score = {duel.BLACK: 2, duel.WHITE: 2}
+        session.move_history = [{}, {}]
+        session.status.return_value = {
+            "winner": duel.BLACK,
+            "winner_tiebreak": "least_total_time",
+            "game_over_reason": "timeout",
+            "time_used_ms": {duel.BLACK: 1200, duel.WHITE: 3400},
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            duel._print_single_game_report(session, get_agent("default"), get_agent("kyle"))
+
+        output = stdout.getvalue()
+        self.assertIn("Winner: black  (time)", output)
+        self.assertIn("Time spent: black 1.20s, white 3.40s", output)
+        self.assertIn("Tiebreak: lower total time used", output)
+
+    def test_all_opponents_report_mentions_total_time_tiebreak(self):
+        games = [
+            {
+                "black_ai_id": "default",
+                "white_ai_id": "kyle",
+                "winner_ai_id": "default",
+                "winner_tiebreak": "least_total_time",
+                "time_used_ms": {duel.BLACK: 2200, duel.WHITE: 5100},
+                "score": {duel.BLACK: 1, duel.WHITE: 1},
+                "moves": 10,
+                "duration_s": 0.5,
+                "agent_color": "black",
+            }
+        ]
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            duel._print_all_opponents_report("default", games)
+
+        output = stdout.getvalue()
+        self.assertIn("default  (time)", output)
+        self.assertIn("time 2.20s-5.10s", output)
+
     def test_resolve_worker_count_defaults_to_cpu_count_and_caps_to_game_count(self):
         with mock.patch("abalone.game.duel.os.cpu_count", return_value=8):
             self.assertEqual(duel._resolve_worker_count(None, 3), 3)
