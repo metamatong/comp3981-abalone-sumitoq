@@ -31,11 +31,11 @@ JONAH_WEIGHTS = {
     # Longer straight formations score more because they are useful for strong moves and pushes.
     "formation": 120.0, 
 
-    # Defensive resilience
+    # Edge safety and rim pressure
 
-    # Edge risk marks marbles on the edge or one step from it as more vulnerable.
-    # The feature is opponent edge-risk minus your edge-risk, so safer shapes score higher.
-    "edge": 40.0,       
+    # Edge pressure combines both sides' edge classification in one pass.
+    # It rewards keeping your marbles away from the rim while also valuing opponent marbles near it.
+    "edge_pressure": 70.0,
     # Stability counts marbles that have at least two friendly neighbors.
     # That favors well-supported pieces that are harder to isolate.
     "stability": 30.0,  
@@ -45,9 +45,6 @@ JONAH_WEIGHTS = {
     # Push potential scans for inline friendly groups with an enemy marble directly ahead.
     # Bigger aligned groups score more because they represent stronger push chances.
     "push": 120.0,      
-    # Threat counts opponent marbles that are on the edge or one step from it.
-    # In the current code this is exposure-based, not a full check for actual friendly pressure.
-    "threat": 100.0,    
 }
 
 evaluate_jonah = build_weighted_evaluator(JONAH_WEIGHTS)

@@ -6,7 +6,7 @@ from ..ai.heuristics import (
     build_weighted_evaluator,
     center_control,
     cohesion,
-    edge_risk,
+    edge_pressure,
     evaluate_board,
     evaluate_with_weights,
     formation_strength,
@@ -15,7 +15,6 @@ from ..ai.heuristics import (
     mobility,
     push_potential,
     stability,
-    threat_pressure,
 )
 
 __all__ = [
@@ -24,7 +23,7 @@ __all__ = [
     "build_weighted_evaluator",
     "center_control",
     "cohesion",
-    "edge_risk",
+    "edge_pressure",
     "evaluate_board",
     "evaluate_with_weights",
     "formation_strength",
@@ -33,5 +32,4 @@ __all__ = [
     "mobility",
     "push_potential",
     "stability",
-    "threat_pressure",
 ]

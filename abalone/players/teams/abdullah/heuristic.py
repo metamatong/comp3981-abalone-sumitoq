@@ -14,10 +14,11 @@ ABDULLAH_WEIGHTS = {
 
     # Strong offensive prioritization
     "push": 200.0,      # High priority on pushing opponent marbles
-    "threat": 150.0,    # Strong emphasis on creating push threats
 
-    # Moderate defensive considerations
-    "edge": 40.0,       # Some penalty for edge proximity
+    # Combined edge safety and rim pressure
+    "edge_pressure": 95.0,  # Balances avoiding exposed own marbles with pressuring rimmed opponent marbles
+
+    # Moderate structural considerations
     "formation": 35.0,  # Moderate value for structured formations
 
     # Slightly increased mobility
