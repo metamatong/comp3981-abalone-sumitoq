@@ -20,7 +20,10 @@ class GameSession:
         self,
         config: Optional[GameConfig] = None,
         initial_time_ms: int = 10 * 60 * 1000,
-        opening_seed: Optional[int] = None,
+        opening_seed: Optional[int] = 0,
+        # TODO right now browser and terminal games are set to make the same first move every time,
+        #  for test purposes, if we want later we can make them both do completely random
+        # opening_seed: Optional[int] = None,
     ):
         """Initialize session state, timers, and a standard starting board."""
         self.initial_time_ms = initial_time_ms
@@ -30,10 +33,11 @@ class GameSession:
         self.board = Board()
         self.current_player = BLACK
         self.move_history: List[dict] = []
-        self.time_left_ms = {BLACK: self.initial_time_ms, WHITE: self.initial_time_ms}
-        self.last_clock_update_ms = self._now_ms()
-        self.turn_start_ms = self._now_ms()
-        self.pause_start_ms: Optional[int] = None
+        self.time_left_us = {BLACK: self.initial_time_ms * 1000, WHITE: self.initial_time_ms * 1000}
+        self.last_clock_update_us = self._now_us()
+        self.turn_start_us = self._now_us()
+        self.turn_start_epoch_ms = int(time.time() * 1000)
+        self.pause_start_us: Optional[int] = None
         self.paused = False
         self.started = False
 
@@ -57,9 +61,9 @@ class GameSession:
         """Return the configured AI preset ID for a player color."""
         return self.config.black_ai_id if player == BLACK else self.config.white_ai_id
 
-    def _now_ms(self) -> int:
-        """Return current wall-clock time in milliseconds."""
-        return int(time.time() * 1000)
+    def _now_us(self) -> int:
+        """Return current monotonic time in microseconds."""
+        return time.perf_counter_ns() // 1000
 
     def _status(self) -> dict:
         """Compute terminal status metadata without mutating session state."""
@@ -86,7 +90,7 @@ class GameSession:
             }
 
         # Timeout: shared game time expired (sum of both clocks)
-        total_time_left = self.time_left_ms[BLACK] + self.time_left_ms[WHITE]
+        total_time_left = self.time_left_us[BLACK] + self.time_left_us[WHITE]
         if total_time_left <= 0:
             if self.board.score[BLACK] > self.board.score[WHITE]:
                 winner = BLACK
@@ -122,17 +126,17 @@ class GameSession:
         }
 
     def _tick_clock(self):
-        """Update active player's remaining time based on elapsed wall-clock time."""
-        now = self._now_ms()
+        """Update active player's remaining time based on elapsed monotonic time."""
+        now = self._now_us()
         if not self.started or self._status()["game_over"] or self.paused:
-            self.last_clock_update_ms = now
+            self.last_clock_update_us = now
             return
 
-        elapsed = max(0, now - self.last_clock_update_ms)
+        elapsed = max(0, now - self.last_clock_update_us)
         if elapsed > 0:
-            self.time_left_ms[self.current_player] = max(0, self.time_left_ms[self.current_player] - elapsed)
+            self.time_left_us[self.current_player] = max(0, self.time_left_us[self.current_player] - elapsed)
 
-        self.last_clock_update_ms = now
+        self.last_clock_update_us = now
 
     def _check_move_time_limit(self):
         """If per-move time limit is exceeded, auto-switch to next player."""
@@ -150,15 +154,16 @@ class GameSession:
         if self._status()["game_over"] or self.paused:
             return
 
-        now = self._now_ms()
-        elapsed_ms = max(0, now - self.turn_start_ms)
-        limit_ms = turn_limit_s * 1000
+        now = self._now_us()
+        elapsed_us = max(0, now - self.turn_start_us)
+        limit_us = turn_limit_s * 1000000
 
-        if elapsed_ms >= limit_ms:
+        if elapsed_us >= limit_us:
             # Auto-switch turn (skip current player's move)
             self.current_player = WHITE if self.current_player == BLACK else BLACK
-            self.last_clock_update_ms = now
-            self.turn_start_ms = now
+            self.last_clock_update_us = now
+            self.turn_start_us = now
+            self.turn_start_epoch_ms = int(time.time() * 1000)
 
     def _before_turn_action(self) -> Optional[str]:
         """Run shared pre-action checks and return an error message when blocked."""
@@ -232,10 +237,10 @@ class GameSession:
         self._tick_clock()
         player = self.current_player
         snapshot = self.board.copy()
-        clock_snapshot = dict(self.time_left_ms)
+        clock_snapshot = dict(self.time_left_us)
 
-        now = self._now_ms()
-        duration_ms = max(0, now - self.turn_start_ms)
+        now = self._now_us()
+        duration_ms = max(0, now - self.turn_start_us) // 1000
 
         result = self.board.apply_move(move, player)
         moved_to = self._moved_positions(move, result)
@@ -256,8 +261,9 @@ class GameSession:
         )
 
         self.current_player = WHITE if self.current_player == BLACK else BLACK
-        self.last_clock_update_ms = now
-        self.turn_start_ms = now
+        self.last_clock_update_us = now
+        self.turn_start_us = now
+        self.turn_start_epoch_ms = int(time.time() * 1000)
 
         return {
             "ok": True,
@@ -294,7 +300,7 @@ class GameSession:
         if turn_limit_s <= 0:
             return None
 
-        elapsed_ms = max(0, self._now_ms() - self.turn_start_ms)
+        elapsed_ms = max(0, (self._now_us() - self.turn_start_us) // 1000)
         remaining_ms = (turn_limit_s * 1000) - elapsed_ms - 100
         return max(0, remaining_ms)
 
@@ -370,10 +376,11 @@ class GameSession:
         entry = self.move_history.pop()
         self.board = entry["snapshot"]
         self.current_player = entry["player"]
-        self.time_left_ms = dict(entry["clock_snapshot"])
-        now = self._now_ms()
-        self.last_clock_update_ms = now
-        self.turn_start_ms = now
+        self.time_left_us = dict(entry["clock_snapshot"])
+        now = self._now_us()
+        self.last_clock_update_us = now
+        self.turn_start_us = now
+        self.turn_start_epoch_ms = int(time.time() * 1000)
         return {"ok": True}
 
     def reset(self) -> dict:
@@ -386,13 +393,14 @@ class GameSession:
         # Use shared game time from config, fallback to initial_time_ms
         # Each player gets half the total game time
         game_time = self.config.game_time_ms if self.config.game_time_ms > 0 else self.initial_time_ms
-        per_player_time = game_time // 2
-        self.time_left_ms = {BLACK: per_player_time, WHITE: per_player_time}
+        per_player_time_us = (game_time // 2) * 1000
+        self.time_left_us = {BLACK: per_player_time_us, WHITE: per_player_time_us}
 
-        now = self._now_ms()
-        self.last_clock_update_ms = now
-        self.turn_start_ms = now
-        self.pause_start_ms = None
+        now = self._now_us()
+        self.last_clock_update_us = now
+        self.turn_start_us = now
+        self.turn_start_epoch_ms = int(time.time() * 1000)
+        self.pause_start_us = None
         self.paused = False
         self.started = True
         self._resigned = False
@@ -411,19 +419,19 @@ class GameSession:
     def toggle_pause(self) -> dict:
         """Toggle pause state while preserving accurate per-turn timing."""
         self._tick_clock()
-        now = self._now_ms()
+        now = self._now_us()
         if not self.paused:
             # Pausing: record when we paused
             self.paused = True
-            self.pause_start_ms = now
+            self.pause_start_us = now
         else:
-            # Resuming: shift turn_start_ms forward so paused time isn't counted
+            # Resuming: shift turn_start_us forward so paused time isn't counted
             self.paused = False
-            if self.pause_start_ms is not None:
-                paused_duration = now - self.pause_start_ms
-                self.turn_start_ms += paused_duration
-                self.pause_start_ms = None
-        self.last_clock_update_ms = now
+            if self.pause_start_us is not None:
+                paused_duration = now - self.pause_start_us
+                self.turn_start_us += paused_duration
+                self.pause_start_us = None
+        self.last_clock_update_us = now
         return {"ok": True, "paused": self.paused}
 
     def state_json(self) -> dict:
@@ -501,11 +509,11 @@ class GameSession:
                 WHITE: self.board.marble_count(WHITE),
             },
             "time_left_ms": {
-                BLACK: self.time_left_ms[BLACK],
-                WHITE: self.time_left_ms[WHITE],
+                BLACK: self.time_left_us[BLACK] // 1000,
+                WHITE: self.time_left_us[WHITE] // 1000,
             },
             "paused": self.paused,
             "initial_time_ms": self.initial_time_ms,
-            "turn_start_ms": self.turn_start_ms,
+            "turn_start_ms": self.turn_start_epoch_ms,
             "started": self.started,
         }

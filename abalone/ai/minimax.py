@@ -295,7 +295,7 @@ def search_best_move(
             avoidance_applied = True
 
     total_nodes = 0
-    best_move = None
+    best_move = legal_moves[0]
     best_score = 0.0
     completed_depth = 0
     timed_out = False
@@ -303,44 +303,75 @@ def search_best_move(
     # Shared across iterative deepening iterations
     tt: Dict[int, TTEntry] = {}
     killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
+    opponent = _opponent(player)
 
     for depth in range(1, requested_depth + 1):
         stats = {"nodes": 0}
         # Reset killer moves each iteration (they're depth-relative)
         for i in range(len(killer_moves)):
             killer_moves[i] = None
+            
+        alpha = -inf
+        beta = inf
+        current_best_score = -inf
+        current_best_move = best_move  # fallback to previous depth's best if timeout occurs early
+
         try:
-            score, move = _minimax(
-                board,
-                player,
-                player,
-                depth,
-                -inf,
-                inf,
-                resolved_agent.evaluator,
-                resolved_config.tie_break,
-                deadline_at,
-                stats,
-                tt,
-                killer_moves,
-                root_legal_moves=legal_moves,
-            )
+            stats["nodes"] += 1
+            tt_key = _make_tt_key(board, player)
+            tt_entry = tt.get(tt_key)
+            tt_move = tt_entry.move if tt_entry is not None else None
+            ordered_moves = _ordered_moves(board, player, legal_moves, tt_move, killer_moves, depth)
+            
+            for move in ordered_moves:
+                _check_deadline(deadline_at)
+                undo_info = board.apply_move_undo(move, player)
+                value, _ = _minimax(
+                    board,
+                    opponent,
+                    player,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    resolved_agent.evaluator,
+                    resolved_config.tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                    killer_moves,
+                )
+                board.undo_move(undo_info)
+                if value > current_best_score or (value == current_best_score and _prefer_by_tie_break(resolved_config.tie_break, move, current_best_move)):
+                    current_best_score = value
+                    current_best_move = move
+                alpha = max(alpha, current_best_score)
+                # alpha-beta at root: root beta is inf so beta <= alpha is never true.
+                
+            tt[tt_key] = TTEntry(depth=depth, value=current_best_score, flag=EXACT, move=current_best_move)
+            
+            total_nodes += stats["nodes"]
+            best_move = current_best_move
+            best_score = current_best_score
+            completed_depth = depth
+
         except _SearchTimeout:
             total_nodes += stats["nodes"]
+            best_move = current_best_move  # best partial move from this depth (or previous if early)
+            if current_best_score != -inf:
+                best_score = current_best_score # use score if we searched at least one move
             timed_out = True
             break
 
-        total_nodes += stats["nodes"]
-        best_move = move
-        best_score = score
-        completed_depth = depth
-
     decision_source = "search"
-    if completed_depth == 0:
+    if completed_depth == 0 and not timed_out:
+        # Fallback only if we didn't search at all
         best_move = legal_moves[0]
         best_score = 0.0
-        decision_source = "timeout_fallback"
-        timed_out = True
+        decision_source = "fallback"
+    elif timed_out and completed_depth == 0:
+        decision_source = "timeout_fallback_partial"
+    elif timed_out:
+        decision_source = "timeout_partial"
     if avoidance_applied and decision_source == "search":
         decision_source = "repeat_avoidance"
 
