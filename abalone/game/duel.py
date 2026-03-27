@@ -1,4 +1,4 @@
-"""AI-vs-AI duel runners with single and one-vs-all reporting modes."""
+﻿"""AI-vs-AI duel runners with single, gauntlet, and tuning modes."""
 
 import argparse
 import os
@@ -7,13 +7,12 @@ import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from .board import BLACK, WHITE
-from .config import GameConfig
-from .session import GameSession
-from ..ai.heuristics import DEFAULT_WEIGHTS
-from ..players.registry import get_agent, list_agents
+from ..ai.heuristics import FEATURE_ORDER
+from ..eval import gauntlet as eval_gauntlet
+from ..game.board import BLACK, WHITE
+from ..players.registry import get_agent, get_agent_weights, list_agents
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -26,6 +25,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run one agent against every other registered agent in two color-swapped games.",
     )
+    parser.add_argument("--tune", action="store_true", help="Run adaptive heuristic tuning in one-vs-all mode.")
+    parser.add_argument("--iterations", type=int, help="Number of tuning iterations to run when --tune is used.")
+    parser.add_argument("--resume-from", help="Resume a prior tuning run from checkpoint.json.")
     parser.add_argument(
         "--depth",
         type=int,
@@ -40,12 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--move-time-s", type=int, default=30, help="Per-turn time limit for both players.")
     parser.add_argument("--max-moves", type=int, default=500, help="Maximum moves before draw/tiebreak.")
-    parser.add_argument("--seed", type=int, default=None, help="Seed for the opening random black move (defaults to random).")
+    parser.add_argument("--seed", type=int, default=0, help="Base seed for reproducible opening move selection.")
     parser.add_argument(
         "--jobs",
         type=int,
         default=None,
-        help="Worker process count for --all-opponents. Defaults to CPU count; use 1 for serial execution.",
+        help="Worker process count for gauntlet and tuning modes. Defaults to CPU count; use 1 for serial execution.",
     )
     return parser
 
@@ -58,35 +60,92 @@ def _run_game(
     move_time_s: int,
     max_moves: int,
     opening_seed: Optional[int],
-) -> GameSession:
-    config = GameConfig(
-        mode="ava",
-        ai_depth=depth,
+    agent_weight_overrides=None,
+    telemetry_agent_ids=None,
+):
+    return eval_gauntlet.run_game_session(
         black_ai_id=black_ai_id,
         white_ai_id=white_ai_id,
-        board_layout=layout,
+        depth=depth,
+        layout=layout,
+        move_time_s=move_time_s,
         max_moves=max_moves,
-        player1_time_per_turn_s=move_time_s,
-        player2_time_per_turn_s=move_time_s,
+        opening_seed=opening_seed,
+        agent_weight_overrides=agent_weight_overrides,
+        telemetry_agent_ids=telemetry_agent_ids,
     )
-    session = GameSession(config=config, opening_seed=opening_seed)
-    session.reset()
-
-    while not session.status()["game_over"]:
-        result = session.apply_agent_move()
-        if "error" in result:
-            raise RuntimeError(result["error"])
-
-    return session
 
 
-def _total_time_by_player(history: List[dict]) -> Dict[int, int]:
-    totals = {BLACK: 0, WHITE: 0}
-    for entry in history:
-        player = entry.get("player")
-        if player in totals:
-            totals[player] += int(entry.get("duration_ms", 0) or 0)
-    return totals
+def _build_all_opponents_jobs(
+    agent_id: str,
+    depth: Optional[int],
+    layout: str,
+    move_time_s: int,
+    max_moves: int,
+    seed: Optional[int],
+) -> List[dict]:
+    return eval_gauntlet.build_all_opponents_jobs(agent_id, depth, layout, move_time_s, max_moves, seed)
+
+
+def _resolve_worker_count(jobs: Optional[int], game_count: int) -> int:
+    return eval_gauntlet.resolve_worker_count(jobs, game_count)
+
+
+def _run_all_opponents_game(job: dict) -> dict:
+    return eval_gauntlet.run_scheduled_game(job)
+
+
+def _shutdown_executor(executor) -> None:
+    shutdown = getattr(executor, "shutdown", None)
+    if shutdown is None:
+        return
+    try:
+        shutdown(wait=True, cancel_futures=True)
+    except TypeError:
+        shutdown()
+
+
+def _cancel_future(future) -> None:
+    cancel = getattr(future, "cancel", None)
+    if cancel is not None:
+        cancel()
+
+
+def _print_gauntlet_start(
+    agent_id: str,
+    game_count: int,
+    worker_count: int,
+    prefix: str = "duel",
+    stream=None,
+) -> None:
+    del prefix
+    progress = _GauntletProgressDisplay(
+        agent_id=agent_id,
+        game_count=game_count,
+        worker_count=worker_count,
+        stream=stream,
+    )
+    progress.start()
+    progress.finish()
+
+
+def _print_gauntlet_progress(
+    completed: int,
+    total: int,
+    game: dict,
+    started_at: Optional[float] = None,
+    prefix: str = "duel",
+    stream=None,
+) -> None:
+    progress = _GauntletProgressDisplay(
+        agent_id=game.get("black_ai_id") or "gauntlet",
+        game_count=total,
+        worker_count=1,
+        stream=stream,
+        prefix=prefix,
+    )
+    progress.started_at = started_at if started_at is not None else time.perf_counter()
+    progress.update(completed, game)
 
 
 def _format_weights(agent) -> str:
@@ -94,14 +153,11 @@ def _format_weights(agent) -> str:
     if not weights:
         return "unknown"
 
-    ordered_keys = list(DEFAULT_WEIGHTS.keys())
-    seen = set()
     parts = []
-    for key in ordered_keys:
+    for key in FEATURE_ORDER:
         if key in weights:
             parts.append(f"{key}={weights[key]:.1f}")
-            seen.add(key)
-    for key in sorted(k for k in weights.keys() if k not in seen):
+    for key in sorted(k for k in weights.keys() if k not in FEATURE_ORDER):
         parts.append(f"{key}={weights[key]:.1f}")
     return ", ".join(parts)
 
@@ -114,21 +170,19 @@ def _winner_label(winner: Optional[int]) -> str:
     return "draw"
 
 
-def _winner_agent_id(winner: Optional[int], black_ai_id: str, white_ai_id: str) -> Optional[str]:
-    if winner == BLACK:
-        return black_ai_id
-    if winner == WHITE:
-        return white_ai_id
-    return None
+def _winner_with_tiebreak(base_label: str, winner_tiebreak: Optional[str]) -> str:
+    if winner_tiebreak == "least_total_time":
+        return f"{base_label}  (time)"
+    return base_label
 
 
-def _print_single_game_report(session: GameSession, black_agent, white_agent) -> None:
+def _print_single_game_report(session, black_agent, white_agent) -> None:
     status = session.status()
     score = dict(session.board.score)
     totals = status.get("time_used_ms", {BLACK: 0, WHITE: 0})
     total_moves = len(session.move_history)
 
-    winner = _winner_label(status.get("winner"))
+    winner = _winner_with_tiebreak(_winner_label(status.get("winner")), status.get("winner_tiebreak"))
     print("__________________________________")
     print("AI vs AI simulation complete.")
     print(f"Winner: {winner} (black {score[BLACK]} - white {score[WHITE]})")
@@ -143,110 +197,6 @@ def _print_single_game_report(session: GameSession, black_agent, white_agent) ->
     print("Heuristic weights:")
     print(f"Black {black_agent.id} ({black_agent.label}): {_format_weights(black_agent)}")
     print(f"White {white_agent.id} ({white_agent.label}): {_format_weights(white_agent)}")
-
-
-def _run_all_opponents_games(
-    agent_id: str,
-    depth: Optional[int],
-    layout: str,
-    move_time_s: int,
-    max_moves: int,
-    seed: Optional[int],
-    jobs: Optional[int],
-) -> List[dict]:
-    scheduled_games = _build_all_opponents_jobs(
-        agent_id=agent_id,
-        depth=depth,
-        layout=layout,
-        move_time_s=move_time_s,
-        max_moves=max_moves,
-        seed=seed,
-    )
-    worker_count = _resolve_worker_count(jobs, len(scheduled_games))
-    progress = _GauntletProgressDisplay(
-        agent_id=agent_id,
-        game_count=len(scheduled_games),
-        worker_count=worker_count,
-    )
-    progress.start()
-    if worker_count <= 1:
-        try:
-            return _run_scheduled_games_serial(scheduled_games, progress)
-        finally:
-            progress.finish()
-
-    try:
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(_run_all_opponents_game, job) for job in scheduled_games]
-            games = []
-            for completed_count, future in enumerate(as_completed(futures), start=1):
-                game = future.result()
-                games.append(game)
-                progress.update(completed_count, game)
-    except (BrokenProcessPool, OSError) as exc:
-        progress.warn_parallel_unavailable(exc)
-        progress.restart_serial()
-        try:
-            return _run_scheduled_games_serial(scheduled_games, progress, reset=True)
-        finally:
-            progress.finish()
-    finally:
-        progress.finish()
-    return sorted(games, key=lambda game: game["index"])
-
-
-def _build_all_opponents_jobs(
-    agent_id: str,
-    depth: Optional[int],
-    layout: str,
-    move_time_s: int,
-    max_moves: int,
-    seed: Optional[int],
-) -> List[dict]:
-    opponents = [agent.id for agent in list_agents() if agent.id != agent_id]
-    jobs: List[dict] = []
-    game_offset = 0
-
-    for opponent_id in opponents:
-        for black_ai_id, white_ai_id in ((agent_id, opponent_id), (opponent_id, agent_id)):
-            jobs.append(
-                {
-                    "index": len(jobs),
-                    "black_ai_id": black_ai_id,
-                    "white_ai_id": white_ai_id,
-                    "depth": depth,
-                    "layout": layout,
-                    "move_time_s": move_time_s,
-                    "max_moves": max_moves,
-                    "opening_seed": seed + game_offset if seed is not None else None,
-                    "agent_color": "black" if black_ai_id == agent_id else "white",
-                }
-            )
-            game_offset += 1
-
-    return jobs
-
-
-def _resolve_worker_count(jobs: Optional[int], game_count: int) -> int:
-    if game_count <= 0:
-        return 0
-    requested = jobs if jobs is not None else (os.cpu_count() or 1)
-    return max(1, min(requested, game_count))
-
-
-def _run_scheduled_games_serial(
-    scheduled_games: List[dict],
-    progress: "_GauntletProgressDisplay",
-    reset: bool = False,
-) -> List[dict]:
-    games = []
-    if reset:
-        progress.reset()
-    for completed_count, job in enumerate(scheduled_games, start=1):
-        game = _run_all_opponents_game(job)
-        games.append(game)
-        progress.update(completed_count, game)
-    return games
 
 
 class _GauntletProgressDisplay:
@@ -266,27 +216,28 @@ class _GauntletProgressDisplay:
         worker_count: int,
         stream=None,
         refresh_s: float = 0.12,
+        prefix: str = "duel",
     ):
         self.agent_id = agent_id
         self.game_count = game_count
         self.worker_count = worker_count
         self.stream = stream or sys.stderr
         self.refresh_s = refresh_s
+        self.prefix = prefix
         self.started_at = time.perf_counter()
         self.completed = 0
-        self.latest_game: Optional[dict] = None
+        self.latest_game = None
         self._frame_index = 0
         self._last_width = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread = None
         self._live = bool(getattr(self.stream, "isatty", lambda: False)())
 
     def start(self) -> None:
         if not self._live:
-            _print_gauntlet_start(self.agent_id, self.game_count, self.worker_count)
+            self._message(f"[{self.prefix}] Starting gauntlet for {self.agent_id}: {self.game_count} game(s), {self._mode_label()}.")
             return
-
         self._render_live_line()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -295,27 +246,17 @@ class _GauntletProgressDisplay:
         if not self._live:
             self.completed = completed
             self.latest_game = game
-            _print_gauntlet_progress(self.completed, self.game_count, self.started_at, game)
+            self._message(self._build_progress_line(completed, game))
             return
-
         with self._lock:
             self.completed = completed
             self.latest_game = game
 
-    def reset(self) -> None:
-        with self._lock:
-            self.started_at = time.perf_counter()
-            self.completed = 0
-            self.latest_game = None
-
-    def warn_parallel_unavailable(self, exc: BaseException) -> None:
-        self._message(
-            "Warning: parallel duel execution is unavailable "
-            f"({exc.__class__.__name__}: {exc}). Continuing serially."
-        )
+    def warn_text(self, text: str) -> None:
+        self._message(text)
 
     def restart_serial(self) -> None:
-        self._message(f"[duel] Restarting gauntlet serially for {self.game_count} game(s).")
+        self._message(f"[{self.prefix}] Restarting gauntlet serially for {self.game_count} game(s).")
 
     def finish(self) -> None:
         if not self._live:
@@ -324,6 +265,9 @@ class _GauntletProgressDisplay:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
+
+    def _mode_label(self) -> str:
+        return "serial" if self.worker_count <= 1 else f"{self.worker_count} workers"
 
     def _run_loop(self) -> None:
         while not self._stop.wait(self.refresh_s):
@@ -335,7 +279,6 @@ class _GauntletProgressDisplay:
         if not self._live:
             print(text, file=self.stream)
             return
-
         with self._lock:
             self._clear_live_line()
             print(text, file=self.stream, flush=True)
@@ -360,45 +303,40 @@ class _GauntletProgressDisplay:
         remaining = max(0, self.game_count - self.completed)
         avg_s = elapsed_s / self.completed if self.completed else 0.0
         eta_s = avg_s * remaining
-        mode = "serial" if self.worker_count <= 1 else f"{self.worker_count} workers"
         latest = "warming up..."
         if self.latest_game is not None:
-            winner = self.latest_game["winner_ai_id"] or "draw"
+            winner = self.latest_game.get("winner_ai_id") or "draw"
             latest = (
-                f"last={self.latest_game['black_ai_id']} vs {self.latest_game['white_ai_id']} "
-                f"-> {winner} ({self.latest_game['moves']}m)"
+                f"last={self.latest_game.get('black_ai_id', '?')} vs {self.latest_game.get('white_ai_id', '?')} "
+                f"-> {winner} ({self.latest_game.get('moves', '?')}m)"
             )
         return (
-            f"[duel] {frame} {_progress_bar(self.completed, self.game_count)} "
+            f"[{self.prefix}] {frame} {_progress_bar(self.completed, self.game_count)} "
             f"{self.completed}/{self.game_count} elapsed={_format_duration(elapsed_s)} "
-            f"eta={_format_duration(eta_s)} mode={mode} {latest}"
+            f"eta={_format_duration(eta_s)} mode={self._mode_label()} {latest}"
         )
 
-
-def _print_gauntlet_start(agent_id: str, game_count: int, worker_count: int) -> None:
-    mode = "serial" if worker_count <= 1 else f"{worker_count} workers"
-    print(
-        f"[duel] Starting gauntlet for {agent_id}: {game_count} game(s), {mode}.",
-        file=sys.stderr,
-    )
-
-
-def _print_gauntlet_restart(game_count: int) -> None:
-    print(
-        f"[duel] Restarting gauntlet serially for {game_count} game(s).",
-        file=sys.stderr,
-    )
+    def _build_progress_line(self, completed: int, game: dict) -> str:
+        elapsed_s = max(0.0, time.perf_counter() - self.started_at)
+        remaining = max(0, self.game_count - completed)
+        avg_s = elapsed_s / completed if completed else 0.0
+        eta_s = avg_s * remaining
+        winner = game.get("winner_ai_id") or "draw"
+        return (
+            f"[{self.prefix}] {_progress_bar(completed, self.game_count)} {completed}/{self.game_count} "
+            f"elapsed={_format_duration(elapsed_s)} eta={_format_duration(eta_s)} "
+            f"last={game.get('black_ai_id', '?')} vs {game.get('white_ai_id', '?')} -> {winner} "
+            f"({game.get('moves', '?')} moves, {float(game.get('duration_s', 0.0) or 0.0):.1f}s)"
+        )
 
 
 def _format_duration(seconds: float) -> str:
     if seconds < 60.0:
         return f"{seconds:.1f}s"
-
     total_seconds = int(round(seconds))
     minutes, secs = divmod(total_seconds, 60)
     if minutes < 60:
         return f"{minutes}m{secs:02d}s"
-
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h{minutes:02d}m"
 
@@ -410,55 +348,121 @@ def _progress_bar(completed: int, total: int, width: int = 20) -> str:
     return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
 
 
-def _print_gauntlet_progress(completed: int, total: int, started_at: float, game: dict) -> None:
-    elapsed_s = max(0.0, time.perf_counter() - started_at)
-    remaining = max(0, total - completed)
-    avg_s = elapsed_s / completed if completed else 0.0
-    eta_s = avg_s * remaining
-    winner = game["winner_ai_id"] or "draw"
-    print(
-        f"[duel] {_progress_bar(completed, total)} {completed}/{total} "
-        f"elapsed={_format_duration(elapsed_s)} eta={_format_duration(eta_s)} "
-        f"last={game['black_ai_id']} vs {game['white_ai_id']} -> {winner} "
-        f"({game['moves']} moves, {game['duration_s']:.1f}s)",
-        file=sys.stderr,
+def _run_all_opponents_games(
+    agent_id: str,
+    depth: Optional[int],
+    layout: str,
+    move_time_s: int,
+    max_moves: int,
+    seed: Optional[int],
+    jobs: Optional[int],
+    agent_weight_overrides=None,
+    telemetry_agent_ids=None,
+    prefix: str = "duel",
+) -> List[dict]:
+    scheduled_games = _build_all_opponents_jobs(
+        agent_id=agent_id,
+        depth=depth,
+        layout=layout,
+        move_time_s=move_time_s,
+        max_moves=max_moves,
+        seed=seed,
     )
-
-
-def _print_parallel_fallback_warning(exc: BaseException) -> None:
-    print(
-        "Warning: parallel duel execution is unavailable "
-        f"({exc.__class__.__name__}: {exc}). Continuing serially.",
-        file=sys.stderr,
+    worker_count = _resolve_worker_count(jobs, len(scheduled_games))
+    progress = _GauntletProgressDisplay(
+        agent_id=agent_id,
+        game_count=len(scheduled_games),
+        worker_count=worker_count,
+        prefix=prefix,
     )
+    if agent_weight_overrides or telemetry_agent_ids:
+        warned_parallel = False
 
+        def on_game_complete(completed: int, total: int, game: dict) -> None:
+            del total
+            progress.update(completed, game)
 
-def _run_all_opponents_game(job: dict) -> dict:
-    start_time = time.perf_counter()
-    session = _run_game(
-        black_ai_id=job["black_ai_id"],
-        white_ai_id=job["white_ai_id"],
-        depth=job["depth"],
-        layout=job["layout"],
-        move_time_s=job["move_time_s"],
-        max_moves=job["max_moves"],
-        opening_seed=job["opening_seed"],
-    )
-    elapsed_s = time.perf_counter() - start_time
-    status = session.status()
-    return {
-        "index": job["index"],
-        "black_ai_id": job["black_ai_id"],
-        "white_ai_id": job["white_ai_id"],
-        "winner_ai_id": _winner_agent_id(status.get("winner"), job["black_ai_id"], job["white_ai_id"]),
-        "winner_tiebreak": status.get("winner_tiebreak"),
-        "game_over_reason": status.get("game_over_reason"),
-        "time_used_ms": status.get("time_used_ms", {BLACK: 0, WHITE: 0}),
-        "score": dict(session.board.score),
-        "moves": len(session.move_history),
-        "duration_s": elapsed_s,
-        "agent_color": job["agent_color"],
-    }
+        def on_warning(message: str) -> None:
+            nonlocal warned_parallel
+            progress.warn_text(message)
+            if not warned_parallel and worker_count > 1:
+                warned_parallel = True
+                progress.restart_serial()
+
+        progress.start()
+        try:
+            return eval_gauntlet.run_scheduled_games(
+                scheduled_games,
+                worker_count,
+                agent_weight_overrides=agent_weight_overrides,
+                telemetry_agent_ids=telemetry_agent_ids,
+                on_game_complete=on_game_complete,
+                on_warning=on_warning,
+            )
+        finally:
+            progress.finish()
+
+    def run_serial(serial_jobs, start_completed: int = 0, existing_games: Optional[List[dict]] = None) -> List[dict]:
+        games = list(existing_games or [])
+        completed = start_completed
+        for job in serial_jobs:
+            game = _run_all_opponents_game(job)
+            games.append(game)
+            completed += 1
+            progress.update(completed, game)
+        return games
+
+    progress.start()
+    try:
+        if worker_count <= 1:
+            return run_serial(scheduled_games)
+
+        try:
+            executor = ProcessPoolExecutor(max_workers=worker_count)
+        except (BrokenProcessPool, OSError, PermissionError) as exc:
+            progress.warn_text(
+                "Warning: parallel duel execution is unavailable "
+                f"({exc.__class__.__name__}: {exc}). Continuing serially."
+            )
+            progress.restart_serial()
+            return run_serial(scheduled_games)
+
+        futures = {}
+        games = []
+        completed_futures = set()
+        try:
+            for job in scheduled_games:
+                futures[executor.submit(_run_all_opponents_game, job)] = job
+
+            for future in as_completed(list(futures.keys())):
+                try:
+                    game = future.result()
+                except (BrokenProcessPool, OSError, PermissionError) as exc:
+                    progress.warn_text(
+                        "Warning: parallel duel execution is unavailable "
+                        f"({exc.__class__.__name__}: {exc}). Continuing serially."
+                    )
+                    progress.restart_serial()
+                    remaining_jobs = [
+                        job
+                        for pending, job in futures.items()
+                        if pending not in completed_futures
+                    ]
+                    for pending in futures:
+                        _cancel_future(pending)
+                    _shutdown_executor(executor)
+                    games = run_serial(remaining_jobs, start_completed=len(games), existing_games=games)
+                    return sorted(games, key=lambda item: item["index"])
+
+                completed_futures.add(future)
+                games.append(game)
+                progress.update(len(games), game)
+        finally:
+            _shutdown_executor(executor)
+
+        return sorted(games, key=lambda item: item["index"])
+    finally:
+        progress.finish()
 
 
 def _format_rate(numerator: int, denominator: int) -> str:
@@ -508,12 +512,13 @@ def _print_all_opponents_report(agent_id: str, games: List[dict]) -> None:
             losses += 1
             winner_label = winner_ai_id
 
+        winner_label = _winner_with_tiebreak(winner_label, game.get("winner_tiebreak"))
         time_used_ms = game.get("time_used_ms", {BLACK: 0, WHITE: 0})
         print(
             f"Game {index} ({duration_s:.1f}s, {moves} moves): "
             f"{black_ai_id} (black) vs {white_ai_id} (white) -> "
             f"{winner_label} ({black_score}-{white_score}, "
-            f"{time_used_ms[BLACK] / 1000.0:.2f}s-{time_used_ms[WHITE] / 1000.0:.2f}s)"
+            f"time {time_used_ms[BLACK] / 1000.0:.2f}s-{time_used_ms[WHITE] / 1000.0:.2f}s)"
         )
 
     print()
@@ -530,6 +535,30 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--depth must be between 1 and 5")
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be >= 1")
+    if args.iterations is not None and args.iterations < 1:
+        parser.error("--iterations must be >= 1")
+
+    if args.resume_from and not args.tune:
+        parser.error("--resume-from can only be used with --tune")
+
+    if args.tune:
+        if not args.all_opponents:
+            parser.error("--tune requires --all-opponents")
+        if args.black_ai or args.white_ai:
+            parser.error("--black-ai/--white-ai cannot be combined with --tune")
+        if args.iterations is None:
+            parser.error("--iterations is required when --tune is used")
+        if not args.resume_from:
+            if not args.agent:
+                parser.error("--agent is required when starting a fresh tuning run")
+            if len(list_agents()) < 2:
+                parser.error("--tune requires at least two registered agents")
+            try:
+                get_agent(args.agent)
+                get_agent_weights(args.agent)
+            except ValueError as exc:
+                parser.error(str(exc))
+        return
 
     if args.all_opponents:
         if not args.agent:
@@ -545,9 +574,11 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         return
 
     if args.jobs is not None:
-        parser.error("--jobs can only be used with --all-opponents")
+        parser.error("--jobs can only be used with --all-opponents or --tune")
     if args.agent:
         parser.error("--agent can only be used with --all-opponents")
+    if args.iterations is not None:
+        parser.error("--iterations can only be used with --tune")
     if not args.black_ai or not args.white_ai:
         parser.error("--black-ai and --white-ai are required unless --all-opponents is used")
     try:
@@ -557,11 +588,81 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error(str(exc))
 
 
+def _run_tuning(args: argparse.Namespace) -> None:
+    target_agent_id = args.agent or "resumed-agent"
+
+    def run_gauntlet_iteration(
+        scheduled_games,
+        worker_count,
+        agent_weight_overrides,
+        telemetry_agent_ids,
+        on_game_complete,
+        on_warning,
+        iteration_index=None,
+        total_iterations=None,
+    ):
+        if iteration_index is not None and total_iterations is not None:
+            progress_prefix = f"Iteration {iteration_index}/{total_iterations}"
+        else:
+            progress_prefix = "tune"
+        progress = _GauntletProgressDisplay(
+            agent_id=target_agent_id,
+            game_count=len(scheduled_games),
+            worker_count=worker_count,
+            prefix=progress_prefix,
+        )
+        warned_parallel = False
+
+        def wrapped_complete(completed, total, game):
+            del total
+            progress.update(completed, game)
+            on_game_complete(completed, len(scheduled_games), game)
+
+        def wrapped_warning(message):
+            nonlocal warned_parallel
+            progress.warn_text(message)
+            if not warned_parallel and worker_count > 1:
+                warned_parallel = True
+                progress.restart_serial()
+            on_warning(message)
+
+        progress.start()
+        try:
+            return eval_gauntlet.run_scheduled_games(
+                scheduled_games,
+                worker_count,
+                agent_weight_overrides=agent_weight_overrides,
+                telemetry_agent_ids=telemetry_agent_ids,
+                on_game_complete=wrapped_complete,
+                on_warning=wrapped_warning,
+            )
+        finally:
+            progress.finish()
+
+    eval_gauntlet.run_tuning_loop(
+        agent_id=args.agent,
+        iterations=args.iterations,
+        depth=args.depth,
+        layout=args.layout,
+        move_time_s=args.move_time_s,
+        max_moves=args.max_moves,
+        seed=args.seed,
+        jobs=args.jobs,
+        resume_from=args.resume_from,
+        run_gauntlet_iteration=run_gauntlet_iteration,
+        announce=print,
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     """Run AI-vs-AI duel simulations and print reports."""
     parser = _build_parser()
     args = parser.parse_args(argv)
     _validate_args(parser, args)
+
+    if args.tune:
+        _run_tuning(args)
+        return
 
     if args.all_opponents:
         games = _run_all_opponents_games(
@@ -588,3 +689,4 @@ def main(argv: Optional[List[str]] = None) -> None:
         opening_seed=args.seed,
     )
     _print_single_game_report(session, black_agent, white_agent)
+

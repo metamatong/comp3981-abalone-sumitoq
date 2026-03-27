@@ -20,11 +20,112 @@ DEFAULT_WEIGHTS = {
     "stability": 25.0,   # marbles with >=2 friendly neighbors (well-supported, harder to isolate)
 }
 
-SUPPORTED_WEIGHT_KEYS = frozenset(DEFAULT_WEIGHTS.keys())
+FEATURE_ORDER = tuple(DEFAULT_WEIGHTS.keys())
+SUPPORTED_WEIGHT_KEYS = frozenset(FEATURE_ORDER)
+
+# Runtime tuning metadata used by the adaptive gauntlet optimizer.
+WEIGHT_TUNING_RULES = {
+    "marble": {"step": 0.04, "min_multiplier": 0.75, "max_multiplier": 1.75},
+    "center": {"step": 0.18, "min_multiplier": 0.20, "max_multiplier": 3.00},
+    "cohesion": {"step": 0.16, "min_multiplier": 0.20, "max_multiplier": 3.00},
+    "cluster": {"step": 0.14, "min_multiplier": 0.20, "max_multiplier": 3.00},
+    "edge_pressure": {"step": 0.18, "min_multiplier": 0.20, "max_multiplier": 3.50},
+    "formation": {"step": 0.16, "min_multiplier": 0.20, "max_multiplier": 3.00},
+    "push": {"step": 0.18, "min_multiplier": 0.20, "max_multiplier": 3.50},
+    "mobility": {"step": 0.18, "min_multiplier": 0.20, "max_multiplier": 3.50},
+    "stability": {"step": 0.16, "min_multiplier": 0.20, "max_multiplier": 3.00},
+}
 
 
 def _opponent(player: int) -> int:
     return WHITE if player == BLACK else BLACK
+
+
+def normalize_weights(
+    weights: Dict[str, float],
+    baseline: Dict[str, float] = DEFAULT_WEIGHTS,
+    *,
+    fill_missing: bool = False,
+) -> Dict[str, float]:
+    """Validate a weight mapping and optionally fill missing keys from a baseline."""
+    unknown_keys = sorted(key for key in weights if key not in SUPPORTED_WEIGHT_KEYS)
+    if unknown_keys:
+        joined = ", ".join(unknown_keys)
+        raise ValueError(f"Unsupported heuristic weight key(s): {joined}")
+    if fill_missing:
+        resolved = dict(baseline)
+        resolved.update(weights)
+        return {key: float(resolved[key]) for key in FEATURE_ORDER}
+    return {key: float(weights[key]) for key in FEATURE_ORDER if key in weights}
+
+
+def extract_features(board: Board, player: int) -> Dict[str, float]:
+    """Return the raw heuristic feature values for `player` on the current board."""
+    opp = _opponent(player)
+    player_marbles_list = board.get_marbles(player)
+    opp_marbles_list = board.get_marbles(opp)
+    player_marbles_set = set(player_marbles_list)
+    opp_marbles_set = set(opp_marbles_list)
+    return {
+        "marble": marble_advantage(player_marbles_list, opp_marbles_list),
+        "center": center_control(player_marbles_list, opp_marbles_list),
+        "cohesion": cohesion(player_marbles_set, opp_marbles_set),
+        "cluster": largest_cluster(player_marbles_set, opp_marbles_set),
+        "edge_pressure": edge_pressure(player_marbles_list, opp_marbles_list),
+        "formation": formation_strength(player_marbles_set, opp_marbles_set),
+        "push": push_potential(player_marbles_set, opp_marbles_set),
+        "mobility": mobility(player_marbles_set, opp_marbles_set),
+        "stability": stability(player_marbles_set, opp_marbles_set),
+    }
+
+
+def evaluate_breakdown(board: Board, player: int, weights: Dict[str, float]) -> Dict[str, Dict[str, float] | float]:
+    """Return raw features plus weighted contributions for reporting and tuning."""
+    resolved = normalize_weights(weights, fill_missing=True)
+    features = extract_features(board, player)
+    contributions = {key: resolved[key] * features[key] for key in FEATURE_ORDER}
+    return {
+        "features": features,
+        "contributions": contributions,
+        "total": sum(contributions.values()),
+    }
+
+
+def weights_to_multipliers(
+    weights: Dict[str, float],
+    baseline: Dict[str, float] = DEFAULT_WEIGHTS,
+) -> Dict[str, float]:
+    """Express absolute weights as baseline-relative multipliers."""
+    resolved_weights = normalize_weights(weights, fill_missing=True)
+    resolved_baseline = normalize_weights(baseline, fill_missing=True)
+    multipliers = {}
+    for key in FEATURE_ORDER:
+        baseline_value = resolved_baseline[key]
+        if baseline_value == 0.0:
+            multipliers[key] = 1.0 if resolved_weights[key] == 0.0 else resolved_weights[key]
+        else:
+            multipliers[key] = resolved_weights[key] / baseline_value
+    return multipliers
+
+
+def clamp_multiplier(key: str, multiplier: float) -> float:
+    """Clamp a multiplier using the per-weight tuning rules."""
+    rules = WEIGHT_TUNING_RULES[key]
+    return max(rules["min_multiplier"], min(rules["max_multiplier"], multiplier))
+
+
+def weights_from_multipliers(
+    baseline: Dict[str, float],
+    multipliers: Dict[str, float],
+) -> Dict[str, float]:
+    """Convert baseline-relative multipliers back into absolute weights."""
+    resolved_baseline = normalize_weights(baseline, fill_missing=True)
+    resolved_multipliers = {key: float(multipliers.get(key, 1.0)) for key in FEATURE_ORDER}
+    weights = {}
+    for key in FEATURE_ORDER:
+        clamped = clamp_multiplier(key, resolved_multipliers[key])
+        weights[key] = resolved_baseline[key] * clamped
+    return weights
 
 
 def marble_advantage(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
@@ -200,6 +301,7 @@ def stability(player_marbles: Set[Position], opp_marbles: Set[Position]) -> floa
 
 def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) -> float:
     """Score a board using a weighted combination of shared heuristic features."""
+    weights = normalize_weights(weights)
     opp = _opponent(player)
 
     # Extract board marbles ONLY ONCE!
@@ -243,11 +345,7 @@ def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) 
 
 def build_weighted_evaluator(weights: Dict[str, float]) -> Callable[[Board, int], float]:
     """Create an evaluator callable from a shared weight dictionary."""
-    resolved = dict(weights)
-    unknown_keys = sorted(key for key in resolved if key not in SUPPORTED_WEIGHT_KEYS)
-    if unknown_keys:
-        joined = ", ".join(unknown_keys)
-        raise ValueError(f"Unsupported heuristic weight key(s): {joined}")
+    resolved = normalize_weights(weights, fill_missing=True)
 
     def evaluator(board: Board, player: int) -> float:
         return evaluate_with_weights(board, player, resolved)

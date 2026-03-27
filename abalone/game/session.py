@@ -5,8 +5,9 @@ from collections.abc import Mapping
 from typing import Dict, List, Optional, Set
 
 from ..ai.agent import choose_move_with_info
+from ..ai.heuristics import evaluate_breakdown
 from ..ai.types import AgentConfig
-from ..players.registry import get_agent, list_agent_metadata
+from ..players.registry import list_agent_metadata, resolve_agent_for_runtime
 from ..players.validator import validate_move, validate_payload_move
 from ..state_space import generate_legal_moves
 from .board import BLACK, WHITE, Board, EMPTY, Move, is_valid, neighbor, pos_to_str, str_to_pos
@@ -21,11 +22,18 @@ class GameSession:
         config: Optional[GameConfig] = None,
         initial_time_ms: int = 10 * 60 * 1000,
         opening_seed: Optional[int] = None,
+        agent_weight_overrides: Optional[Dict[str, Dict[str, float]]] = None,
+        telemetry_agent_ids: Optional[Set[str]] = None,
     ):
         """Initialize session state, timers, and a standard starting board."""
         self.initial_time_ms = initial_time_ms
         self.config = config or GameConfig()
         self.opening_seed = opening_seed
+        self.agent_weight_overrides = {
+            agent_id: {key: float(value) for key, value in weights.items()}
+            for agent_id, weights in (agent_weight_overrides or {}).items()
+        }
+        self.telemetry_agent_ids = set(telemetry_agent_ids or ())
 
         self.board = Board()
         self.current_player = BLACK
@@ -332,6 +340,20 @@ class GameSession:
                 return move
         return None
 
+    def _build_agent_telemetry(self, agent, player: int) -> Optional[dict]:
+        """Collect lightweight heuristic telemetry for selected runtime agents."""
+        if agent.id not in self.telemetry_agent_ids:
+            return None
+        weights = getattr(agent.evaluator, "weights", None)
+        if not weights:
+            return None
+        breakdown = evaluate_breakdown(self.board, player, weights)
+        return {
+            "features": breakdown["features"],
+            "contributions": breakdown["contributions"],
+            "total": breakdown["total"],
+        }
+
     def apply_agent_move(self) -> dict:
         """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
@@ -342,9 +364,10 @@ class GameSession:
             return {"error": "It is a human-controlled turn."}
 
         agent_id = self.ai_id_for_player(self.current_player)
-        agent = get_agent(agent_id)
+        agent = resolve_agent_for_runtime(agent_id, self.agent_weight_overrides)
         time_budget_ms = self._current_turn_budget_ms()
         avoid_move = self._repeat_move_to_avoid()
+        pre_move = self._build_agent_telemetry(agent, self.current_player)
         search_result = choose_move_with_info(
             self.board,
             self.current_player,
@@ -357,6 +380,9 @@ class GameSession:
                 avoid_move=avoid_move,
             ),
         )
+        search_payload = search_result.as_dict()
+        if pre_move is not None:
+            search_payload["pre_move"] = pre_move
 
         move = search_result.move
         ok, error = validate_move(self.board, self.current_player, move)
@@ -366,7 +392,7 @@ class GameSession:
         return self._apply_move(
             move,
             source=CONTROLLER_AI,
-            search=search_result.as_dict(),
+            search=search_payload,
             agent_id=agent.id,
             agent_label=agent.label,
         )

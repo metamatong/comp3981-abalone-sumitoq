@@ -1,6 +1,6 @@
-# Abalone
+﻿# Abalone
 
-A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI and a state-space generator for building AI players.
+A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI, a state-space generator, local AI benchmarking, and adaptive heuristic tuning.
 
 ## Quick Start
 
@@ -34,6 +34,12 @@ python3 run.py duel --agent jonah --all-opponents --depth 2
 # One-agent gauntlet with an explicit worker count
 python3 run.py duel --agent jonah --all-opponents --depth 2 --jobs 4
 
+# Adaptive heuristic tuning: repeated one-vs-all gauntlets with checkpointed weight updates
+python3 run.py duel --agent jonah --all-opponents --tune --iterations 20 --depth 2 --jobs 4
+
+# Resume a prior tuning run from its checkpoint
+python3 run.py duel --all-opponents --tune --resume-from abalone/eval_runs/jonah/<config>/<timestamp>/checkpoint.json --iterations 40
+
 # State-space analysis
 python3 run.py state
 
@@ -52,7 +58,7 @@ python3 -m unittest discover -s tests
 
 The web server automatically tries nearby ports if the requested one is busy.
 
-No external dependencies — runs on Python 3.8+ standard library only.
+No external dependencies - runs on Python 3.8+ standard library only.
 
 ## CLI Usage
 
@@ -82,6 +88,7 @@ Use these preset IDs with `--black-ai` and `--white-ai`:
 - Cole AI: edit `abalone/players/teams/cole/heuristic.py`
 - Jonah AI: edit `abalone/players/teams/jonah/heuristic.py`
 - Each member preset currently starts with the same copied baseline weights, but those files are independent and can diverge without affecting `default`
+- Adaptive tuning runs do not rewrite these source files; mutable weights are checkpointed under `abalone/eval_runs/`
 
 ### Common CLI Modes
 
@@ -145,7 +152,7 @@ A game can end in four ways:
 1. On launch, choose mode from the modal (`Human vs Human`, `Human vs AI`, `AI vs AI`).
 2. In AI-controlled modes, select the `Black AI` and/or `White AI` preset by color.
 3. In `Human vs AI`, choose the human color; only the AI-controlled side selector is shown.
-4. Click 1–3 of your marbles to select them (blue glow).
+4. Click 1â€“3 of your marbles to select them (blue glow).
 5. Valid destinations light up as blue dots.
 6. Click a destination to execute the move.
 7. AI turns auto-play in AI-controlled turns.
@@ -175,7 +182,7 @@ A game can end in four ways:
 |------|--------|---------|---------|
 | Inline | `{n}:{trailing}{goal}` | `3:h7e7` | 3 stones at h7,g7,f7 move toward e7 |
 | Single | `1:{from}{to}` | `1:e5e6` | Stone at e5 moves to e6 |
-| Broadside | `{n}:{end1}-{end2}>{DIR}` | `3:c3-c5>NW` | 3 stones c3–c5 all move NW |
+| Broadside | `{n}:{end1}-{end2}>{DIR}` | `3:c3-c5>NW` | 3 stones c3â€“c5 all move NW |
 | Push | `*` suffix | `3:e3e6*` | Move pushed an opponent marble |
 
 - **trailing** = back marble (before move)
@@ -195,9 +202,9 @@ Three starting layouts are available, selectable via CLI or `/api/config`:
 
 The game tracks two timing systems, both configurable via `/api/config`:
 
-- **Game clock** (`game_time_ms`, default 30 min) — total shared time split equally between players. When the combined time runs out, the game ends.
-- **Per-turn time limit** (`player1_time_per_turn_s`, `player2_time_per_turn_s`, default 30s each) — if a player exceeds their turn limit, their turn is automatically skipped.
-- **Move duration** — each move in the history records `duration_ms`, the wall-clock time the player took.
+- **Game clock** (`game_time_ms`, default 30 min) â€” total shared time split equally between players. When the combined time runs out, the game ends.
+- **Per-turn time limit** (`player1_time_per_turn_s`, `player2_time_per_turn_s`, default 30s each) â€” if a player exceeds their turn limit, their turn is automatically skipped.
+- **Move duration** â€” each move in the history records `duration_ms`, the wall-clock time the player took.
 
 In CLI and benchmark usage:
 
@@ -241,6 +248,132 @@ The summary prints:
 - average move time
 - average completed depth
 
+## Duel And Adaptive Tuning
+
+Use `python3 run.py duel` for single-game reports, one-vs-all gauntlets, and long-running heuristic tuning.
+
+### Single Duel
+
+```bash
+python3 run.py duel --black-ai default --white-ai cole --depth 2
+```
+
+This runs one AI-vs-AI game and prints the winner, score, move count, time usage, and the active heuristic weights for both sides.
+
+### One-Vs-All Gauntlet
+
+```bash
+python3 run.py duel --agent jonah --all-opponents --depth 2 --jobs 4
+```
+
+- The target agent plays every other registered agent twice: once as black and once as white.
+- `--jobs` defaults to the CPU count; use `--jobs 1` to force serial execution.
+- A live stderr progress line is shown while games are running.
+- Results are sorted back into schedule order before reporting, even when workers finish out of order.
+
+### Adaptive Tuning Mode
+
+```bash
+python3 run.py duel \
+  --agent jonah \
+  --all-opponents \
+  --tune \
+  --iterations 20 \
+  --depth 2 \
+  --layout standard \
+  --move-time-s 5 \
+  --max-moves 80 \
+  --seed 7 \
+  --jobs 4
+```
+
+One tuning iteration does the following:
+
+1. Runs the full side-swapped gauntlet for the target agent against every other registered agent.
+2. Analyzes each completed match using the tuned agent's heuristic telemetry and search diagnostics.
+3. Aggregates likely reasons for losses and weak draws, including edge exposure, fragmentation, mobility collapse, weak push threats, poor center control, material loss, and search instability.
+4. Adjusts the target agent's heuristic weights and starts the next iteration.
+
+During a tuning run, the console output is intentionally minimal:
+
+- a live progress line for the current gauntlet, labeled as `Iteration X/Y`
+- one completed-iteration result line such as `Iteration 5/20: W=3 D=0 L=7 capture_diff=-5 partial_searches=0 rejected.`
+- a final summary block when the run finishes
+
+Checkpoint files are still written throughout the run, but those save-path messages are not printed during normal execution.
+
+### Tuning Flags
+
+| Flag | Meaning |
+|------|---------|
+| `--agent` | Tuned preset ID for fresh tuning runs |
+| `--all-opponents` | Required for tuning and gauntlet mode |
+| `--tune` | Enable adaptive heuristic tuning |
+| `--iterations` | Number of tuning iterations to run |
+| `--resume-from` | Resume from an existing `checkpoint.json` |
+| `--depth` | Shared search-depth override; omit to use each preset's default depth |
+| `--layout` | `standard`, `belgian_daisy`, or `german_daisy` |
+| `--move-time-s` | Per-turn time limit for both colors |
+| `--max-moves` | Move cap before draw/tiebreak |
+| `--seed` | Base seed for reproducible random black openings |
+| `--jobs` | Worker process count for gauntlet/tuning mode |
+
+### Tuning Artifacts
+
+Each tuning run writes artifacts under:
+
+```text
+abalone/eval_runs/<agent>/<config-slug>/<timestamp>/
+```
+
+| File | Purpose |
+|------|---------|
+| `checkpoint.json` | Source of truth for baseline, current, and best weights; config; progress; latest analyses; and artifact paths |
+| `matches.jsonl` | One JSON line per completed game, including telemetry summaries and inferred reasons |
+| `iterations.jsonl` | One JSON line per completed tuning iteration, including the score tuple, accepted/rejected status, and weight deltas |
+
+Notes:
+
+- Runtime tuning uses generated checkpoint files, not the original preset source files.
+- If you interrupt the process, the current weights are flushed to `checkpoint.json` before the command exits.
+- Resume with `--resume-from <checkpoint.json>` to continue from the saved state.
+- `current_weights` are the candidate weights being evaluated or prepared for the next iteration.
+- `best_weights` are the strongest weights seen so far under the optimizer's full score ordering; they are not always the most recent weights.
+
+### Final Tuning Summary
+
+When tuning completes, the CLI prints a summary in this shape:
+
+```text
+Final summary:
+Time elapsed: 10m42s
+Iterations completed: 10
+Layout: belgian_daisy
+Agent: tournament-belgian
+Max moves: 80
+
+Average win rate 60.00%
+Best win rate 80.00% (Iterations, 2, 4, 7)
+
+Best heuristic:
+marble 50000.000->50284.038 (+284.038, x1.006)
+center 85.000->117.256 (+32.256, x1.379)
+cohesion 70.000->94.304 (+24.304, x1.347)
+cluster 25.000->31.095 (+6.095, x1.244)
+edge_pressure 121.000->129.261 (+8.261, x1.068)
+formation 88.000->110.470 (+22.470, x1.255)
+push 330.000->436.821 (+106.821, x1.324)
+mobility 38.000->49.448 (+11.448, x1.301)
+stability 52.000->64.274 (+12.274, x1.236)
+```
+
+Interpretation:
+
+- `Average win rate` is the mean win rate across all completed tuning iterations.
+- `Best win rate` lists every iteration that matched the peak win rate.
+- `Best heuristic` is the single best-so-far weight profile stored in `best_weights`, shown as a diff from the baseline heuristic.
+- If several iterations share the same peak win rate, the printed heuristic still comes from the one that won the optimizer's full tie-break ordering, not from an average of those iterations.
+
 ## State-Space Generator
 
 For building AI / search algorithms. This module returns only legal, deduplicated moves.
@@ -251,10 +384,10 @@ Given a `.input` file describing a board position, you can generate **two** outp
 
 | File | Extension | Contents |
 |------|-----------|----------|
-| Board states | `.board` | One line per legal move — the resulting board state in compact token format |
-| Move notations | `.move` | One line per legal move — the move notation (e.g. `1:c5c6`, `3:d5g8`) |
+| Board states | `.board` | One line per legal move â€” the resulting board state in compact token format |
+| Move notations | `.move` | One line per legal move â€” the move notation (e.g. `1:c5c6`, `3:d5g8`) |
 
-Both files have the same number of lines in the same order — line *N* of the `.move` file is the move that produces line *N* of the `.board` file.
+Both files have the same number of lines in the same order â€” line *N* of the `.move` file is the move that produces line *N* of the `.board` file.
 
 **To generate both files, run:**
 
@@ -263,8 +396,8 @@ python3 run.py state --state-input-file abalone/state_space_inputs/Test1.input -
 ```
 
 This produces:
-- `abalone/state_space_outputs/Test1.board` — resulting board states
-- `abalone/state_space_outputs/Test1.move` — move notations
+- `abalone/state_space_outputs/Test1.board` â€” resulting board states
+- `abalone/state_space_outputs/Test1.move` â€” move notations
 
 **To generate from Test2:**
 
@@ -284,7 +417,7 @@ The `.move` file is always created alongside the `.board` file automatically (sa
 
 Each `.input` file has two parts:
 
-1. **Line 1**: `b` or `w` — which player moves next
+1. **Line 1**: `b` or `w` â€” which player moves next
 2. **Line 2+**: comma-separated marble tokens like `C5b,D5b,E7w,...`
    - Each token is `<Col><Row><color>` where color is `b` (black) or `w` (white)
 
@@ -297,14 +430,14 @@ C5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,
 
 ### Output File Formats
 
-**`.board` file** — each line is a resulting board state:
+**`.board` file** â€” each line is a resulting board state:
 ```
 C6b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w
 B5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w
 ...
 ```
 
-**`.move` file** — each line is a move notation:
+**`.move` file** â€” each line is a move notation:
 ```
 1:c5c6
 1:c5b5
@@ -370,10 +503,12 @@ board = snapshot  # restore
 
 ## Architecture
 
-```
+```text
 Browser (HTML/JS)              Python (abalone/)
-  render board    ◄── JSON ──  game/board.py    Board, Move, validation, apply
-  click events    ── POST ──►  game/server.py   HTTP API, session + mode config
+  render board    <- JSON ->   game/board.py    Board, Move, validation, apply
+  click events    -> POST ->   game/server.py   HTTP API, session + mode config
+                               game/duel.py     duel, gauntlet, and tuning CLI orchestration
+                               eval/*           reusable gauntlet runners + adaptive tuning
                                state_space.py   legal move generation
                                game/cli.py      CLI game loop
                                game/main.py     CLI entry point
@@ -381,27 +516,31 @@ Browser (HTML/JS)              Python (abalone/)
                                players/*        preset registry + team-owned AI configs
 ```
 
-All game logic runs in Python. The browser is a pure display layer — it renders the JSON state and sends clicks back as API calls.
+All game logic runs in Python. The browser is a pure display layer - it renders the JSON state and sends clicks back as API calls.
 
-```
+```text
 abalone/
   __init__.py
   board.py         # compatibility shim -> game/board.py
   ai/
     agent.py       # shared opening rule + choose_move(...) interface
     minimax.py     # iterative deepening minimax + alpha-beta + move ordering
-    heuristics.py  # shared heuristic features + default weighted evaluator
+    heuristics.py  # shared heuristic features, tuning metadata, and weighted evaluators
     defaults.py    # shared default AI preset
     types.py       # AgentDefinition + AgentConfig
+  eval/
+    __init__.py
+    gauntlet.py    # reusable gauntlet execution, telemetry analysis, checkpoints, tuning loop
   game/
     board.py       # Board, Move, positions, validation, apply, display
     cli.py         # CLI game loop with text UI and AI turns
+    duel.py        # single duel, one-vs-all gauntlet, and adaptive tuning CLI
     main.py        # CLI entry point
     server.py      # HTTP server + JSON API
-    session.py     # shared runtime state, timers, clocks
+    session.py     # shared runtime state, timers, clocks, runtime weight overrides, telemetry
     config.py      # mode/layout/timer configuration
   players/
-    registry.py    # selectable AI preset registry
+    registry.py    # selectable AI preset registry + runtime override helpers
     teams/         # Kyle / Abdullah / Cole / Jonah agent packages
       kyle/        # Kyle-owned agents.py + heuristic.py
       abdullah/    # Abdullah-owned agents.py + heuristic.py
@@ -416,14 +555,16 @@ abalone/
   server.py        # compatibility shim -> game/server.py
   main.py          # compatibility shim -> game/main.py
   static/
-    index.html     # Web UI — HTML structure and layout
-    style.css      # Web UI — all CSS styles
-    script.js      # Web UI — all JS logic (state, rendering, API calls)
+    index.html     # Web UI - HTML structure and layout
+    style.css      # Web UI - all CSS styles
+    script.js      # Web UI - all JS logic (state, rendering, API calls)
 tests/
+  test_duel.py
+  test_duel_tuning.py
   test_last_move_indicator.py
   test_players.py
   test_session_modes.py
-run.py             # Runner: web / cli / state / match
+run.py             # Runner: web / cli / state / match / duel
 ```
 
 ## API Endpoints (Web UI)
@@ -441,13 +582,13 @@ run.py             # Runner: web / cli / state / match
 
 ### `/api/config` Fields
 
-All fields are optional — send only the ones you want to change.
+All fields are optional â€” send only the ones you want to change.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mode` | string | `"hvh"` | `hvh` (human-human), `hva` (human-AI), `ava` (AI-AI) |
 | `human_side` | string/int | `"black"` | Human color in `hva` mode |
-| `ai_depth` | int | `2` | Minimax search depth (1–5) |
+| `ai_depth` | int | `2` | Minimax search depth (1â€“5) |
 | `black_ai_id` | string | `"default"` | Selected AI preset for black |
 | `white_ai_id` | string | `"default"` | Selected AI preset for white |
 | `board_layout` | string | `"standard"` | `standard`, `belgian_daisy`, or `german_daisy` |
@@ -457,3 +598,5 @@ All fields are optional — send only the ones you want to change.
 | `player2_time_per_turn_s` | int | `30` | White's per-turn time limit in seconds |
 
 Fixed `--seed` values make the random black opening reproducible across benchmark runs.
+
+
