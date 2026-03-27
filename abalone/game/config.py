@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from .board import BLACK, WHITE
-from ..players.registry import DEFAULT_BLACK_AI_ID, DEFAULT_WHITE_AI_ID, get_agent
+from ..players.registry import DEFAULT_BLACK_AI_ID, DEFAULT_WHITE_AI_ID
 
 MODE_HVH = "hvh"
 MODE_HVA = "hva"
@@ -89,6 +89,7 @@ def normalize_depth(value: object) -> Optional[int]:
 
 def normalize_ai_id(value: object) -> str:
     """Normalize and validate a selectable AI agent ID."""
+    from ..players.registry import get_agent
     agent_id = str(value).strip()
     return get_agent(agent_id).id
 

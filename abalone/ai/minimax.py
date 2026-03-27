@@ -190,21 +190,24 @@ def _minimax(
         for move in legal_moves:
             _check_deadline(deadline_at)
             undo_info = board.apply_move_undo(move, to_move)
-            value, _ = _minimax(
-                board,
-                opponent,
-                root_player,
-                depth - 1,
-                alpha,
-                beta,
-                evaluator,
-                tie_break,
-                deadline_at,
-                stats,
-                tt,
-                killer_moves,
-            )
-            board.undo_move(undo_info)
+            try:
+                value, _ = _minimax(
+                    board,
+                    opponent,
+                    root_player,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                    killer_moves,
+                )
+            finally:
+                board.undo_move(undo_info)
+
             if value > best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
                 best_value = value
                 best_move = move
@@ -219,21 +222,24 @@ def _minimax(
         for move in legal_moves:
             _check_deadline(deadline_at)
             undo_info = board.apply_move_undo(move, to_move)
-            value, _ = _minimax(
-                board,
-                opponent,
-                root_player,
-                depth - 1,
-                alpha,
-                beta,
-                evaluator,
-                tie_break,
-                deadline_at,
-                stats,
-                tt,
-                killer_moves,
-            )
-            board.undo_move(undo_info)
+            try:
+                value, _ = _minimax(
+                    board,
+                    opponent,
+                    root_player,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                    killer_moves,
+                )
+            finally:
+                board.undo_move(undo_info)
+
             if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
                 best_value = value
                 best_move = move
@@ -317,7 +323,6 @@ def search_best_move(
         current_best_move = best_move  # fallback to previous depth's best if timeout occurs early
 
         try:
-            stats["nodes"] += 1
             tt_key = _make_tt_key(board, player)
             tt_entry = tt.get(tt_key)
             tt_move = tt_entry.move if tt_entry is not None else None
@@ -326,21 +331,25 @@ def search_best_move(
             for move in ordered_moves:
                 _check_deadline(deadline_at)
                 undo_info = board.apply_move_undo(move, player)
-                value, _ = _minimax(
-                    board,
-                    opponent,
-                    player,
-                    depth - 1,
-                    alpha,
-                    beta,
-                    resolved_agent.evaluator,
-                    resolved_config.tie_break,
-                    deadline_at,
-                    stats,
-                    tt,
-                    killer_moves,
-                )
-                board.undo_move(undo_info)
+                try:
+                    stats["nodes"] += 1
+                    value, _ = _minimax(
+                        board,
+                        opponent,
+                        player,
+                        depth - 1,
+                        alpha,
+                        beta,
+                        resolved_agent.evaluator,
+                        resolved_config.tie_break,
+                        deadline_at,
+                        stats,
+                        tt,
+                        killer_moves,
+                    )
+                finally:
+                    board.undo_move(undo_info)
+
                 if value > current_best_score or (value == current_best_score and _prefer_by_tie_break(resolved_config.tie_break, move, current_best_move)):
                     current_best_score = value
                     current_best_move = move
