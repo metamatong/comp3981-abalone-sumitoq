@@ -20,10 +20,7 @@ class GameSession:
         self,
         config: Optional[GameConfig] = None,
         initial_time_ms: int = 10 * 60 * 1000,
-        opening_seed: Optional[int] = 0,
-        # TODO right now browser and terminal games are set to make the same first move every time,
-        #  for test purposes, if we want later we can make them both do completely random
-        # opening_seed: Optional[int] = None,
+        opening_seed: Optional[int] = None,
     ):
         """Initialize session state, timers, and a standard starting board."""
         self.initial_time_ms = initial_time_ms

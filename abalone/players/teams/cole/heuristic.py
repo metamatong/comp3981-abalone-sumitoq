@@ -14,6 +14,5 @@ COLE_WEIGHTS = {
     "mobility": 50.0,   # Number of available legal moves
     "stability": 20.0,  # How safe marbles are from being pushed
 }
-# TODO results are consistently different browser vs terminal
 
 evaluate_cole = build_weighted_evaluator(COLE_WEIGHTS)

@@ -40,7 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--move-time-s", type=int, default=30, help="Per-turn time limit for both players.")
     parser.add_argument("--max-moves", type=int, default=500, help="Maximum moves before draw/tiebreak.")
-    parser.add_argument("--seed", type=int, default=0, help="Seed for the opening random black move.")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for the opening random black move (defaults to random).")
     parser.add_argument(
         "--jobs",
         type=int,
@@ -57,7 +57,7 @@ def _run_game(
     layout: str,
     move_time_s: int,
     max_moves: int,
-    opening_seed: int,
+    opening_seed: Optional[int],
 ) -> GameSession:
     config = GameConfig(
         mode="ava",
@@ -151,7 +151,7 @@ def _run_all_opponents_games(
     layout: str,
     move_time_s: int,
     max_moves: int,
-    seed: int,
+    seed: Optional[int],
     jobs: Optional[int],
 ) -> List[dict]:
     scheduled_games = _build_all_opponents_jobs(
@@ -201,7 +201,7 @@ def _build_all_opponents_jobs(
     layout: str,
     move_time_s: int,
     max_moves: int,
-    seed: int,
+    seed: Optional[int],
 ) -> List[dict]:
     opponents = [agent.id for agent in list_agents() if agent.id != agent_id]
     jobs: List[dict] = []
@@ -218,7 +218,7 @@ def _build_all_opponents_jobs(
                     "layout": layout,
                     "move_time_s": move_time_s,
                     "max_moves": max_moves,
-                    "opening_seed": seed + game_offset,
+                    "opening_seed": seed + game_offset if seed is not None else None,
                     "agent_color": "black" if black_ai_id == agent_id else "white",
                 }
             )
