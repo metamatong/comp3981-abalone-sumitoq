@@ -9,7 +9,7 @@ AGENTS = [
         label="Tournament: Belgian Daisy",
         owner="Tournament",
         evaluator=evaluate_belgian_daisy,
-        default_depth=4,
+        default_depth=3,
         tie_break="lexicographic",
     )
 ]
