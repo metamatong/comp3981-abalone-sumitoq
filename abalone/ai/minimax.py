@@ -42,6 +42,9 @@ class SearchResult:
     time_budget_ms: Optional[int]
     agent_id: str
     agent_label: str
+    heuristic_calls: int = 0
+    heuristic_time_ms: float = 0.0
+    heuristic_avg_ms: float = 0.0
 
     def as_dict(self) -> Dict[str, object]:
         """Serialize search diagnostics for CLI/API responses."""
@@ -58,6 +61,9 @@ class SearchResult:
             "time_budget_ms": self.time_budget_ms,
             "agent_id": self.agent_id,
             "agent_label": self.agent_label,
+            "heuristic_calls": self.heuristic_calls,
+            "heuristic_time_ms": round(self.heuristic_time_ms, 3),
+            "heuristic_avg_ms": round(self.heuristic_avg_ms, 6),
         }
 
 
@@ -129,7 +135,20 @@ def _check_deadline(deadline_at: Optional[float]) -> None:
 
 def _make_tt_key(board: Board, to_move: int) -> int:
     """Create TT hash key using Zobrist hash XOR'd with side-to-move key."""
-    return board.zhash ^ ZOBRIST[('side', to_move)]
+    return board.zhash ^ ZOBRIST[("side", to_move)]
+
+
+def _evaluate_with_timing(board: Board, player: int, evaluator, heuristic_stats: Optional[Dict[str, float]]) -> float:
+    """Evaluate a board state and record heuristic timing statistics."""
+    start_eval = time.perf_counter()
+    value = evaluator(board, player)
+    elapsed_ms = (time.perf_counter() - start_eval) * 1000.0
+
+    if heuristic_stats is not None:
+        heuristic_stats["calls"] += 1
+        heuristic_stats["time_ms"] += elapsed_ms
+
+    return value
 
 
 def _minimax(
@@ -146,6 +165,7 @@ def _minimax(
     tt: Dict[int, TTEntry],
     killer_moves: List[Optional[Move]],
     root_legal_moves: Optional[List[Move]] = None,
+    heuristic_stats: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, Optional[Move]]:
     """Run depth-limited minimax with alpha-beta pruning, TT, killer moves, and undo/redo."""
     _check_deadline(deadline_at)
@@ -170,7 +190,7 @@ def _minimax(
     tt_move = tt_entry.move if tt_entry is not None else None
 
     if depth == 0 or _is_terminal(board):
-        return evaluator(board, root_player), None
+        return _evaluate_with_timing(board, root_player, evaluator, heuristic_stats), None
 
     if root_legal_moves is not None:
         legal_moves = root_legal_moves
@@ -178,7 +198,7 @@ def _minimax(
         legal_moves = generate_legal_moves(board, to_move)
 
     if not legal_moves:
-        return evaluator(board, root_player), None
+        return _evaluate_with_timing(board, root_player, evaluator, heuristic_stats), None
 
     legal_moves = _ordered_moves(board, to_move, legal_moves, tt_move, killer_moves, depth)
     maximizing = to_move == root_player
@@ -203,6 +223,7 @@ def _minimax(
                 stats,
                 tt,
                 killer_moves,
+                heuristic_stats=heuristic_stats,
             )
             board.undo_move(undo_info)
             if value > best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
@@ -210,7 +231,6 @@ def _minimax(
                 best_move = move
             alpha = max(alpha, best_value)
             if beta <= alpha:
-                # Record killer move on cutoff
                 if depth < len(killer_moves):
                     killer_moves[depth] = move
                 break
@@ -232,6 +252,7 @@ def _minimax(
                 stats,
                 tt,
                 killer_moves,
+                heuristic_stats=heuristic_stats,
             )
             board.undo_move(undo_info)
             if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
@@ -266,15 +287,26 @@ def search_best_move(
     requested_depth = resolved_config.depth
     start = time.perf_counter()
     deadline_at = None
+
+    heuristic_stats: Dict[str, float] = {
+        "calls": 0,
+        "time_ms": 0.0,
+    }
+
     if resolved_config.time_budget_ms and resolved_config.time_budget_ms > 0:
         deadline_at = start + (resolved_config.time_budget_ms / 1000.0)
 
     legal_moves = _ordered_moves(board, player, generate_legal_moves(board, player))
     if not legal_moves:
         elapsed_ms = (time.perf_counter() - start) * 1000.0
+        score = _evaluate_with_timing(board, player, resolved_agent.evaluator, heuristic_stats)
+        heur_calls = int(heuristic_stats["calls"])
+        heur_time = heuristic_stats["time_ms"]
+        heur_avg = heur_time / heur_calls if heur_calls > 0 else 0.0
+
         return SearchResult(
             move=None,
-            score=resolved_agent.evaluator(board, player),
+            score=score,
             nodes=0,
             elapsed_ms=elapsed_ms,
             depth=requested_depth,
@@ -284,6 +316,9 @@ def search_best_move(
             time_budget_ms=resolved_config.time_budget_ms,
             agent_id=resolved_agent.id,
             agent_label=resolved_agent.label,
+            heuristic_calls=heur_calls,
+            heuristic_time_ms=heur_time,
+            heuristic_avg_ms=heur_avg,
         )
 
     avoid_move = resolved_config.avoid_move
@@ -300,13 +335,11 @@ def search_best_move(
     completed_depth = 0
     timed_out = False
 
-    # Shared across iterative deepening iterations
     tt: Dict[int, TTEntry] = {}
     killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
 
     for depth in range(1, requested_depth + 1):
         stats = {"nodes": 0}
-        # Reset killer moves each iteration (they're depth-relative)
         for i in range(len(killer_moves)):
             killer_moves[i] = None
         try:
@@ -324,6 +357,7 @@ def search_best_move(
                 tt,
                 killer_moves,
                 root_legal_moves=legal_moves,
+                heuristic_stats=heuristic_stats,
             )
         except _SearchTimeout:
             total_nodes += stats["nodes"]
@@ -345,6 +379,10 @@ def search_best_move(
         decision_source = "repeat_avoidance"
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
+    heur_calls = int(heuristic_stats["calls"])
+    heur_time = heuristic_stats["time_ms"]
+    heur_avg = heur_time / heur_calls if heur_calls > 0 else 0.0
+
     return SearchResult(
         move=best_move,
         score=best_score,
@@ -357,4 +395,7 @@ def search_best_move(
         time_budget_ms=resolved_config.time_budget_ms,
         agent_id=resolved_agent.id,
         agent_label=resolved_agent.label,
+        heuristic_calls=heur_calls,
+        heuristic_time_ms=heur_time,
+        heuristic_avg_ms=heur_avg,
     )

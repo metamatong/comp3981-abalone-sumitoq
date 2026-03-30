@@ -145,6 +145,24 @@ def _print_single_game_report(session: GameSession, black_agent, white_agent) ->
     status = session.status()
     score = dict(session.board.score)
     totals = _total_time_by_player(session.move_history)
+    heur_calls = {BLACK: 0, WHITE: 0}
+    heur_time = {BLACK: 0.0, WHITE: 0.0}
+
+    for entry in session.move_history:
+        player = entry.get("player")
+        result = entry.get("result")
+
+        if not result:
+            continue
+
+        if player in (BLACK, WHITE):
+            heur_calls[player] += result.get("heuristic_calls", 0)
+            heur_time[player] += result.get("heuristic_time_ms", 0.0)
+
+    heur_avg = {
+        BLACK: (heur_time[BLACK] / heur_calls[BLACK]) if heur_calls[BLACK] > 0 else 0.0,
+        WHITE: (heur_time[WHITE] / heur_calls[WHITE]) if heur_calls[WHITE] > 0 else 0.0,
+    }
     total_moves = len(session.move_history)
 
     winner = _winner_label(status.get("winner"))
@@ -160,6 +178,23 @@ def _print_single_game_report(session: GameSession, black_agent, white_agent) ->
     print("Heuristic weights:")
     print(f"Black {black_agent.id} ({black_agent.label}): {_format_weights(black_agent)}")
     print(f"White {white_agent.id} ({white_agent.label}): {_format_weights(white_agent)}")
+    print(
+        "Heuristic usage: "
+        f"black {heur_calls[BLACK]} calls, "
+        f"white {heur_calls[WHITE]} calls"
+    )
+
+    print(
+        "Heuristic time: "
+        f"black {heur_time[BLACK] / 1000.0:.2f}s, "
+        f"white {heur_time[WHITE] / 1000.0:.2f}s"
+    )
+
+    print(
+        "Avg heuristic eval: "
+        f"black {heur_avg[BLACK]:.4f} ms, "
+        f"white {heur_avg[WHITE]:.4f} ms"
+    )
 
 
 def _run_all_opponents_games(

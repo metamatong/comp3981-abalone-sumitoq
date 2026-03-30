@@ -242,7 +242,7 @@ class GameSession:
         self.move_history.append(
             {
                 "move": move,
-                "result": result,
+                "result": search if search is not None else result,
                 "moved_to": moved_to,
                 "snapshot": snapshot,
                 "clock_snapshot": clock_snapshot,
