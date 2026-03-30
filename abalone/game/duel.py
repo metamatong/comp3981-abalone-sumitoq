@@ -90,21 +90,40 @@ def _total_time_by_player(history: List[dict]) -> Dict[int, int]:
 
 
 def _format_weights(agent) -> str:
+    """Format heuristic weights for reporting.
+
+    Supports both:
+    - flat weight dictionaries: {"center": 40.0, ...}
+    - phase-based dictionaries:
+      {
+          "opening": {"center": 100.0, ...},
+          "midgame": {...},
+          "endgame": {...},
+      }
+    """
     weights = getattr(agent.evaluator, "weights", None)
     if not weights:
-        return "unknown"
+        return "n/a"
 
-    ordered_keys = list(DEFAULT_WEIGHTS.keys())
-    seen = set()
     parts = []
-    for key in ordered_keys:
-        if key in weights:
-            parts.append(f"{key}={weights[key]:.1f}")
-            seen.add(key)
-    for key in sorted(k for k in weights.keys() if k not in seen):
-        parts.append(f"{key}={weights[key]:.1f}")
-    return ", ".join(parts)
 
+    for key, value in weights.items():
+        if isinstance(value, dict):
+            inner_parts = []
+
+            for inner_key, inner_value in value.items():
+                if isinstance(inner_value, (int, float)):
+                    inner_parts.append(f"{inner_key}={inner_value:.1f}")
+                else:
+                    inner_parts.append(f"{inner_key}={inner_value}")
+
+            parts.append(f"{key}[" + ", ".join(inner_parts) + "]")
+        elif isinstance(value, (int, float)):
+            parts.append(f"{key}={value:.1f}")
+        else:
+            parts.append(f"{key}={value}")
+
+    return ", ".join(parts)
 
 def _winner_label(winner: Optional[int]) -> str:
     if winner == BLACK:
