@@ -210,22 +210,24 @@ def _minimax(
         for move in legal_moves:
             _check_deadline(deadline_at)
             undo_info = board.apply_move_undo(move, to_move)
-            value, _ = _minimax(
-                board,
-                opponent,
-                root_player,
-                depth - 1,
-                alpha,
-                beta,
-                evaluator,
-                tie_break,
-                deadline_at,
-                stats,
-                tt,
-                killer_moves,
-                heuristic_stats=heuristic_stats,
-            )
-            board.undo_move(undo_info)
+            try:
+                value, _ = _minimax(
+                    board,
+                    opponent,
+                    root_player,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                    killer_moves,
+                    heuristic_stats=heuristic_stats,
+                )
+            finally:
+                board.undo_move(undo_info)
             if value > best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
                 best_value = value
                 best_move = move
@@ -239,22 +241,24 @@ def _minimax(
         for move in legal_moves:
             _check_deadline(deadline_at)
             undo_info = board.apply_move_undo(move, to_move)
-            value, _ = _minimax(
-                board,
-                opponent,
-                root_player,
-                depth - 1,
-                alpha,
-                beta,
-                evaluator,
-                tie_break,
-                deadline_at,
-                stats,
-                tt,
-                killer_moves,
-                heuristic_stats=heuristic_stats,
-            )
-            board.undo_move(undo_info)
+            try:
+                value, _ = _minimax(
+                    board,
+                    opponent,
+                    root_player,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                    killer_moves,
+                    heuristic_stats=heuristic_stats,
+                )
+            finally:
+                board.undo_move(undo_info)
             if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
                 best_value = value
                 best_move = move
@@ -334,14 +338,25 @@ def search_best_move(
     best_score = 0.0
     completed_depth = 0
     timed_out = False
+    last_completed_iteration_ms = 0.0
 
     tt: Dict[int, TTEntry] = {}
     killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
 
     for depth in range(1, requested_depth + 1):
+        if deadline_at is not None and completed_depth > 0:
+            remaining_ms = (deadline_at - time.perf_counter()) * 1000.0
+            estimated_next_depth_ms = max(last_completed_iteration_ms * 1.5, 25.0)
+
+            if remaining_ms <= estimated_next_depth_ms:
+                timed_out = True
+                break
+
         stats = {"nodes": 0}
         for i in range(len(killer_moves)):
             killer_moves[i] = None
+
+        iteration_start = time.perf_counter()
         try:
             score, move = _minimax(
                 board,
@@ -368,13 +383,25 @@ def search_best_move(
         best_move = move
         best_score = score
         completed_depth = depth
+        last_completed_iteration_ms = (time.perf_counter() - iteration_start) * 1000.0
 
     decision_source = "search"
+    if timed_out and completed_depth > 0:
+        decision_source = "time_limited_search"
+
     if completed_depth == 0:
         best_move = legal_moves[0]
         best_score = 0.0
         decision_source = "timeout_fallback"
         timed_out = True
+
+    # Safety fallback: ensure the chosen move is valid at the root
+    if best_move is None or best_move not in legal_moves:
+        best_move = legal_moves[0]
+        best_score = 0.0
+        decision_source = "timeout_fallback"
+        timed_out = True
+
     if avoidance_applied and decision_source == "search":
         decision_source = "repeat_avoidance"
 
