@@ -30,6 +30,9 @@ class AgentConfig:
     opening_seed: Optional[int] = None
     is_opening_turn: bool = False
     avoid_move: Optional[Move] = None
+    root_candidate_limit: int = 0
+    analysis_evaluator_id: Optional[str] = None
+    board_token_before: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,9 @@ class ResolvedAgentConfig:
     opening_seed: Optional[int]
     is_opening_turn: bool
     avoid_move: Optional[Move]
+    root_candidate_limit: int
+    analysis_evaluator_id: Optional[str]
+    board_token_before: Optional[str]
 
 
 def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] = None) -> ResolvedAgentConfig:
@@ -54,4 +60,7 @@ def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] =
         opening_seed=config.opening_seed,
         is_opening_turn=config.is_opening_turn,
         avoid_move=config.avoid_move,
+        root_candidate_limit=max(0, int(config.root_candidate_limit or 0)),
+        analysis_evaluator_id=config.analysis_evaluator_id,
+        board_token_before=config.board_token_before,
     )
