@@ -42,11 +42,14 @@ class SearchResult:
     time_budget_ms: Optional[int]
     agent_id: str
     agent_label: str
+    root_candidates: Optional[List[Dict[str, object]]] = None
+    analysis_evaluator_id: Optional[str] = None
+    board_token_before: Optional[str] = None
 
     def as_dict(self) -> Dict[str, object]:
         """Serialize search diagnostics for CLI/API responses."""
         notation = None if self.move is None else self.move.to_notation()
-        return {
+        payload = {
             "notation": notation,
             "score": self.score,
             "nodes": self.nodes,
@@ -59,6 +62,13 @@ class SearchResult:
             "agent_id": self.agent_id,
             "agent_label": self.agent_label,
         }
+        if self.root_candidates:
+            payload["root_candidates"] = list(self.root_candidates)
+        if self.analysis_evaluator_id:
+            payload["analysis_evaluator_id"] = self.analysis_evaluator_id
+        if self.board_token_before:
+            payload["board_token_before"] = self.board_token_before
+        return payload
 
 
 class _SearchTimeout(Exception):
@@ -305,6 +315,7 @@ def search_best_move(
     best_score = 0.0
     completed_depth = 0
     timed_out = False
+    root_candidates: List[Dict[str, object]] = []
 
     # Shared across iterative deepening iterations
     tt: Dict[int, TTEntry] = {}
@@ -321,6 +332,7 @@ def search_best_move(
         beta = inf
         current_best_score = -inf
         current_best_move = best_move  # fallback to previous depth's best if timeout occurs early
+        depth_candidates: List[Dict[str, object]] = []
 
         try:
             tt_key = _make_tt_key(board, player)
@@ -353,6 +365,14 @@ def search_best_move(
                 if value > current_best_score or (value == current_best_score and _prefer_by_tie_break(resolved_config.tie_break, move, current_best_move)):
                     current_best_score = value
                     current_best_move = move
+                if resolved_config.root_candidate_limit > 0:
+                    depth_candidates.append(
+                        {
+                            "notation": move.to_notation(),
+                            "score": round(value, 6),
+                            "depth": depth,
+                        }
+                    )
                 alpha = max(alpha, current_best_score)
                 # alpha-beta at root: root beta is inf so beta <= alpha is never true.
                 
@@ -362,6 +382,11 @@ def search_best_move(
             best_move = current_best_move
             best_score = current_best_score
             completed_depth = depth
+            if resolved_config.root_candidate_limit > 0:
+                root_candidates = sorted(
+                    depth_candidates,
+                    key=lambda item: (-float(item["score"]), str(item["notation"])),
+                )[: resolved_config.root_candidate_limit]
 
         except _SearchTimeout:
             total_nodes += stats["nodes"]
@@ -369,6 +394,11 @@ def search_best_move(
             if current_best_score != -inf:
                 best_score = current_best_score # use score if we searched at least one move
             timed_out = True
+            if resolved_config.root_candidate_limit > 0 and depth_candidates:
+                root_candidates = sorted(
+                    depth_candidates,
+                    key=lambda item: (-float(item["score"]), str(item["notation"])),
+                )[: resolved_config.root_candidate_limit]
             break
 
     decision_source = "search"
@@ -397,4 +427,7 @@ def search_best_move(
         time_budget_ms=resolved_config.time_budget_ms,
         agent_id=resolved_agent.id,
         agent_label=resolved_agent.label,
+        root_candidates=root_candidates or None,
+        analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+        board_token_before=resolved_config.board_token_before,
     )

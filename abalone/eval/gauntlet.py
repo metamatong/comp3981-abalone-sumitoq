@@ -15,22 +15,36 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from ..ai.heuristics import (
     FEATURE_ORDER,
     WEIGHT_TUNING_RULES,
+    evaluate_breakdown,
     normalize_weights,
     weights_from_multipliers,
     weights_to_multipliers,
 )
-from ..game.board import BLACK, WHITE
+from ..ai.agent import choose_move_with_info
+from ..ai.types import AgentConfig
+from ..game.board import BLACK, WHITE, Board
 from ..game.config import GameConfig
 from ..game.session import GameSession
-from ..players.registry import get_agent_weights, list_agents
+from ..players.registry import build_runtime_agent, get_agent_weights, list_agents
+from ..state_space import generate_legal_moves
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 RUNS_ROOT = Path("abalone") / "eval_runs"
 PARTIAL_SEARCH_SOURCES = frozenset({"timeout_partial", "timeout_fallback", "timeout_fallback_partial"})
 SEARCH_INSTABILITY_SOURCES = PARTIAL_SEARCH_SOURCES | frozenset({"repeat_avoidance"})
-OUTCOME_WEIGHTS = {"loss": 3.0, "draw": 1.0, "win": 0.0}
+OUTCOME_WEIGHTS = {"loss": 3.0, "weak_draw": 1.0, "draw": 0.0, "win": 0.0}
 PHASE_STEP_SCALES = {"exploration": 1.0, "refinement": 0.45, "recovery": 1.35}
 PHASE_JITTER_SCALES = {"exploration": 0.35, "refinement": 0.12, "recovery": 0.50}
+TRAINING_SEED_PAIRS = 2
+VALIDATION_SEED_PAIRS = 1
+MAX_LOSS_CRITICAL_TURNS = 3
+MAX_WEAK_DRAW_CRITICAL_TURNS = 2
+MAX_ANALYSIS_ROOT_CANDIDATES = 3
+ANALYSIS_DEPTH_BONUS = 1
+ANALYSIS_TIME_BUDGET_MS = 1500
+ANALYSIS_MISSED_WIN_THRESHOLD = 250.0
+WEAK_DRAW_LATE_MATERIAL_THRESHOLD = -0.75
+WEAK_DRAW_INSTABILITY_THRESHOLD = 2
 REASON_TO_WEIGHT_DIRECTIONS = {
     "edge_exposure": {"edge_pressure": 1.0, "stability": 0.8, "center": 0.4},
     "fragmentation": {"cohesion": 1.0, "cluster": 0.8, "stability": 0.7, "mobility": 0.2},
@@ -131,6 +145,45 @@ def build_all_opponents_jobs(
     return jobs
 
 
+def build_tuning_jobs(
+    agent_id: str,
+    depth: Optional[int],
+    layout: str,
+    move_time_s: int,
+    max_moves: int,
+    seed: int,
+    opponents: Sequence[str],
+    training_seed_pairs: int = TRAINING_SEED_PAIRS,
+    validation_seed_pairs: int = VALIDATION_SEED_PAIRS,
+) -> Dict[str, List[dict]]:
+    """Build per-iteration train/validation schedules with repeated seed pairs."""
+    schedules = {"train": [], "validation": []}
+    index = 0
+    seed_cursor = int(seed)
+    for split, pair_count in (("train", training_seed_pairs), ("validation", validation_seed_pairs)):
+        for pair_index in range(pair_count):
+            for opponent_id in opponents:
+                for black_ai_id, white_ai_id in ((agent_id, opponent_id), (opponent_id, agent_id)):
+                    schedules[split].append(
+                        {
+                            "index": index,
+                            "black_ai_id": black_ai_id,
+                            "white_ai_id": white_ai_id,
+                            "depth": depth,
+                            "layout": layout,
+                            "move_time_s": move_time_s,
+                            "max_moves": max_moves,
+                            "opening_seed": seed_cursor,
+                            "agent_color": "black" if black_ai_id == agent_id else "white",
+                            "schedule_split": split,
+                            "pair_index": pair_index,
+                        }
+                    )
+                    index += 1
+                    seed_cursor += 1
+    return schedules
+
+
 def resolve_worker_count(requested_jobs: Optional[int], game_count: int) -> int:
     """Resolve the effective worker count for a gauntlet run."""
     if game_count <= 0:
@@ -222,6 +275,7 @@ def run_scheduled_game(
         "index": job["index"],
         "black_ai_id": job["black_ai_id"],
         "white_ai_id": job["white_ai_id"],
+        "schedule_split": job.get("schedule_split", "train"),
         "winner_ai_id": winner_agent_id(status.get("winner"), job["black_ai_id"], job["white_ai_id"]),
         "winner_tiebreak": status.get("winner_tiebreak"),
         "game_over_reason": status.get("game_over_reason"),
@@ -388,8 +442,115 @@ def _target_color(game: dict, target_agent_id: str) -> int:
     return BLACK if game["black_ai_id"] == target_agent_id else WHITE
 
 
-def analyze_match_result(game: dict, target_agent_id: str) -> dict:
-    """Infer likely reasons for a game result from the tuned agent's telemetry."""
+def _phase_for_turn(turn_index: int, total_turns: int) -> str:
+    if total_turns <= 0:
+        return "midgame"
+    ratio = float(turn_index + 1) / float(total_turns)
+    if ratio <= 0.33:
+        return "opening"
+    if ratio <= 0.75:
+        return "midgame"
+    return "late"
+
+
+def _feature_values(blob: Optional[dict]) -> Dict[str, float]:
+    features = {}
+    source = (blob or {}).get("features") or {}
+    for key in FEATURE_ORDER:
+        features[key] = float(source.get(key, 0.0) or 0.0)
+    return features
+
+
+def _feature_total(blob: Optional[dict]) -> float:
+    return float((blob or {}).get("total", 0.0) or 0.0)
+
+
+def _exact_legal_move_count(board_token: Optional[str], player: int) -> int:
+    if not board_token:
+        return 0
+    board = Board.from_compact_token(board_token)
+    return len(generate_legal_moves(board, player))
+
+
+def _late_turns(turns: Sequence[dict]) -> Sequence[dict]:
+    if not turns:
+        return ()
+    start_index = max(0, len(turns) - max(1, len(turns) // 3))
+    return turns[start_index:]
+
+
+def _teacher_root_analysis(
+    *,
+    board_token: Optional[str],
+    player: int,
+    agent_id: str,
+    requested_depth: int,
+    analysis_weights: Optional[Dict[str, float]],
+    fallback_weights: Optional[Dict[str, float]],
+) -> Optional[dict]:
+    if not board_token:
+        return None
+
+    teacher_weights = analysis_weights or fallback_weights
+    if not teacher_weights:
+        return None
+
+    board = Board.from_compact_token(board_token)
+    teacher_agent = build_runtime_agent(agent_id, teacher_weights)
+    analysis_evaluator_id = "analysis-fixed" if analysis_weights else "analysis-fallback-best"
+    result = choose_move_with_info(
+        board,
+        player,
+        agent=teacher_agent,
+        config=AgentConfig(
+            depth=max(int(requested_depth or 0) + ANALYSIS_DEPTH_BONUS, 2),
+            time_budget_ms=ANALYSIS_TIME_BUDGET_MS,
+            root_candidate_limit=MAX_ANALYSIS_ROOT_CANDIDATES,
+            analysis_evaluator_id=analysis_evaluator_id,
+            board_token_before=board_token,
+        ),
+    )
+    teacher_move = result.move
+    if teacher_move is None:
+        return None
+
+    teacher_board = Board.from_compact_token(board_token)
+    teacher_board.apply_move(teacher_move, player)
+    teacher_breakdown = evaluate_breakdown(teacher_board, player, teacher_weights)
+
+    return {
+        "analysis_evaluator_id": analysis_evaluator_id,
+        "teacher_move": teacher_move.to_notation(),
+        "teacher_score": _round_float(result.score, 6),
+        "teacher_depth": int(result.completed_depth),
+        "teacher_candidates": result.root_candidates or [],
+        "teacher_post": {
+            "features": {key: _round_float(teacher_breakdown["features"][key], 6) for key in FEATURE_ORDER},
+            "total": _round_float(teacher_breakdown["total"], 6),
+        },
+    }
+
+
+def _feature_delta_summary(counterfactuals: Sequence[dict]) -> Dict[str, float]:
+    totals = {key: 0.0 for key in FEATURE_ORDER}
+    for item in counterfactuals:
+        for key, value in (item.get("feature_delta") or {}).items():
+            totals[key] = totals.get(key, 0.0) + float(value or 0.0)
+    return {
+        key: _round_float(value, 6)
+        for key, value in totals.items()
+        if abs(value) > 1e-9
+    }
+
+
+def analyze_match_result(
+    game: dict,
+    target_agent_id: str,
+    *,
+    analysis_weights: Optional[Dict[str, float]] = None,
+    fallback_analysis_weights: Optional[Dict[str, float]] = None,
+) -> dict:
+    """Analyze one game using phase-aware critical turns and offline teacher reruns."""
     target_color = _target_color(game, target_agent_id)
     opponent_color = WHITE if target_color == BLACK else BLACK
     opponent_id = _opponent_for_game(game, target_agent_id)
@@ -399,142 +560,309 @@ def analyze_match_result(game: dict, target_agent_id: str) -> dict:
     capture_diff = target_score - opponent_score
 
     target_entries = [entry for entry in game.get("history", []) if entry.get("agent_id") == target_agent_id]
-    feature_samples = []
     decision_sources = []
     completed_depths = []
     requested_depths = []
     move_durations = []
-    for entry in target_entries:
+    feature_samples = []
+    turns = []
+    phase_breakdown = {
+        "opening": {"turns": 0, "criticality": 0.0},
+        "midgame": {"turns": 0, "criticality": 0.0},
+        "late": {"turns": 0, "criticality": 0.0},
+    }
+
+    total_target_turns = len(target_entries)
+    for turn_index, entry in enumerate(target_entries):
         search = entry.get("search") or {}
         pre_move = search.get("pre_move") or {}
-        features = pre_move.get("features")
-        if features:
-            feature_samples.append(features)
-        decision_sources.append(search.get("decision_source") or "unknown")
-        completed_depths.append(float(search.get("completed_depth", 0) or 0))
-        requested_depths.append(float(search.get("depth", 0) or 0))
-        move_durations.append(float(entry.get("duration_ms", 0) or 0))
+        post_move = search.get("post_move") or {}
+        pre_features = _feature_values(pre_move)
+        post_features = _feature_values(post_move)
+        if pre_move.get("features"):
+            feature_samples.append(pre_features)
+
+        decision_source = search.get("decision_source") or "unknown"
+        requested_depth = int(search.get("depth", 0) or 0)
+        completed_depth = float(search.get("completed_depth", 0) or 0)
+        move_duration = float(entry.get("duration_ms", 0) or 0)
+        board_token_before = search.get("board_token_before")
+        board_token_after = search.get("board_token_after")
+        exact_before = _exact_legal_move_count(board_token_before, target_color)
+        exact_after = _exact_legal_move_count(board_token_after, target_color)
+        eval_drop = max(0.0, _feature_total(pre_move) - _feature_total(post_move))
+        center_drop = max(0.0, pre_features["center"] - post_features["center"])
+        edge_drop = max(0.0, pre_features["edge_pressure"] - post_features["edge_pressure"])
+        cohesion_drop = max(0.0, pre_features["cohesion"] - post_features["cohesion"])
+        cluster_drop = max(0.0, pre_features["cluster"] - post_features["cluster"])
+        stability_drop = max(0.0, pre_features["stability"] - post_features["stability"])
+        mobility_drop = max(0.0, float(exact_before - exact_after))
+        phase = _phase_for_turn(turn_index, total_target_turns)
+        phase_weight = {"opening": 1.0, "midgame": 1.2, "late": 1.45}[phase]
+        search_penalty = 0.0
+        if decision_source in PARTIAL_SEARCH_SOURCES:
+            search_penalty += 2.0
+        elif decision_source == "repeat_avoidance" and eval_drop > 0.0:
+            search_penalty += 0.75
+        criticality = phase_weight * (
+            (eval_drop / 200.0)
+            + max(0.0, -post_features["marble"]) * 1.5
+            + (center_drop * 0.03)
+            + (edge_drop * 0.04)
+            + ((cohesion_drop + cluster_drop + stability_drop) * 0.02)
+            + (mobility_drop * 0.18)
+            + search_penalty
+        )
+
+        phase_breakdown[phase]["turns"] += 1
+        phase_breakdown[phase]["criticality"] += criticality
+        turns.append(
+            {
+                "turn_index": turn_index,
+                "phase": phase,
+                "decision_source": decision_source,
+                "requested_depth": requested_depth,
+                "completed_depth": completed_depth,
+                "duration_ms": move_duration,
+                "board_token_before": board_token_before,
+                "board_token_after": board_token_after,
+                "pre_features": pre_features,
+                "post_features": post_features,
+                "pre_total": _feature_total(pre_move),
+                "post_total": _feature_total(post_move),
+                "exact_legal_moves_before": exact_before,
+                "exact_legal_moves_after": exact_after,
+                "criticality": criticality,
+                "notation": entry.get("notation") or search.get("notation"),
+            }
+        )
+        decision_sources.append(decision_source)
+        completed_depths.append(completed_depth)
+        requested_depths.append(float(requested_depth))
+        move_durations.append(move_duration)
 
     feature_averages = {
         key: _round_float(_mean([float(sample.get(key, 0.0)) for sample in feature_samples]), 4)
         for key in FEATURE_ORDER
     }
     partial_searches = sum(1 for source in decision_sources if source in PARTIAL_SEARCH_SOURCES)
-    unstable_decisions = sum(1 for source in decision_sources if source in SEARCH_INSTABILITY_SOURCES)
+    unstable_decisions = sum(
+        1
+        for turn in turns
+        if turn["decision_source"] in PARTIAL_SEARCH_SOURCES
+        or (turn["decision_source"] == "repeat_avoidance" and turn["criticality"] > 0.0)
+    )
     avg_completed_depth = _round_float(_mean(completed_depths), 4)
     avg_requested_depth = _round_float(_mean(requested_depths), 4)
     avg_move_ms = _round_float(_mean(move_durations), 3)
 
-    reasons = []
+    late_turns = list(_late_turns(turns))
+    late_material_avg = _mean([float(turn["post_features"]["marble"]) for turn in late_turns]) if late_turns else 0.0
+    provisional_weak_draw = (
+        outcome == "draw"
+        and (
+            late_material_avg <= WEAK_DRAW_LATE_MATERIAL_THRESHOLD
+            or unstable_decisions >= WEAK_DRAW_INSTABILITY_THRESHOLD
+        )
+    )
 
-    def add_reason(code: str, severity: float, summary: str, evidence: dict) -> None:
-        if severity <= 0.0:
-            return
-        reasons.append(
+    critical_turn_limit = 0
+    if outcome == "loss":
+        critical_turn_limit = MAX_LOSS_CRITICAL_TURNS
+    elif outcome == "draw":
+        critical_turn_limit = MAX_WEAK_DRAW_CRITICAL_TURNS
+    critical_turns = sorted(turns, key=lambda item: (-item["criticality"], -item["turn_index"]))[:critical_turn_limit]
+
+    counterfactuals = []
+    for turn in critical_turns:
+        teacher = _teacher_root_analysis(
+            board_token=turn.get("board_token_before"),
+            player=target_color,
+            agent_id=target_agent_id,
+            requested_depth=turn["requested_depth"],
+            analysis_weights=analysis_weights,
+            fallback_weights=fallback_analysis_weights,
+        )
+        if teacher is None:
+            continue
+        teacher_features = teacher["teacher_post"]["features"]
+        feature_delta = {
+            key: _round_float(float(teacher_features.get(key, 0.0)) - float(turn["post_features"].get(key, 0.0)), 6)
+            for key in FEATURE_ORDER
+        }
+        total_delta = _round_float(float(teacher["teacher_post"]["total"]) - float(turn["post_total"]), 6)
+        counterfactuals.append(
             {
-                "code": code,
-                "score": _round_float(severity, 4),
-                "summary": summary,
-                "evidence": evidence,
+                "turn_index": turn["turn_index"],
+                "phase": turn["phase"],
+                "board_token_before": turn.get("board_token_before"),
+                "chosen_move": turn.get("notation"),
+                "chosen_score": _round_float(turn["post_total"], 6),
+                "teacher_move": teacher["teacher_move"],
+                "teacher_score": teacher["teacher_score"],
+                "teacher_depth": teacher["teacher_depth"],
+                "analysis_evaluator_id": teacher["analysis_evaluator_id"],
+                "total_delta": total_delta,
+                "feature_delta": {key: value for key, value in feature_delta.items() if abs(value) > 1e-9},
+                "teacher_candidates": teacher["teacher_candidates"],
             }
         )
 
-    if feature_averages["edge_pressure"] < -1.0:
-        add_reason(
-            "edge_exposure",
-            abs(feature_averages["edge_pressure"]),
-            "The agent repeatedly operated from more exposed edge positions than its opponent.",
-            {
-                "avg_edge_pressure": feature_averages["edge_pressure"],
-                "avg_stability": feature_averages["stability"],
+    missed_win = any(float(item.get("total_delta", 0.0)) >= ANALYSIS_MISSED_WIN_THRESHOLD for item in counterfactuals)
+    weak_draw = bool(provisional_weak_draw or (outcome == "draw" and missed_win))
+    tuning_outcome = "weak_draw" if weak_draw else outcome
+    drives_tuning = outcome == "loss" or weak_draw
+
+    reasons = []
+    if drives_tuning:
+        reason_map = {
+            "edge_exposure": {
+                "summary": "Critical turns increased edge exposure or reduced local support near the rim.",
+                "score": 0.0,
+                "evidence": {"avg_edge_pressure": feature_averages["edge_pressure"], "turns": []},
             },
-        )
-
-    fragmentation_pressure = (
-        abs(min(feature_averages["cohesion"], 0.0))
-        + abs(min(feature_averages["cluster"], 0.0))
-        + abs(min(feature_averages["stability"], 0.0))
-    )
-    if fragmentation_pressure >= 1.5:
-        add_reason(
-            "fragmentation",
-            fragmentation_pressure,
-            "The agent's group structure became looser and less stable than the opponent's.",
-            {
-                "avg_cohesion": feature_averages["cohesion"],
-                "avg_cluster": feature_averages["cluster"],
-                "avg_stability": feature_averages["stability"],
+            "fragmentation": {
+                "summary": "Critical turns loosened group structure and reduced support.",
+                "score": 0.0,
+                "evidence": {
+                    "avg_cohesion": feature_averages["cohesion"],
+                    "avg_cluster": feature_averages["cluster"],
+                    "avg_stability": feature_averages["stability"],
+                    "turns": [],
+                },
             },
-        )
-
-    if feature_averages["mobility"] < -1.0:
-        add_reason(
-            "mobility_collapse",
-            abs(feature_averages["mobility"]),
-            "The agent spent too many turns with fewer practical movement options.",
-            {"avg_mobility": feature_averages["mobility"]},
-        )
-
-    push_pressure = abs(min(feature_averages["push"], 0.0)) + abs(min(feature_averages["formation"], 0.0))
-    if push_pressure >= 1.5:
-        add_reason(
-            "weak_push_threat",
-            push_pressure,
-            "The agent generated weaker pushing threats and formations than its opponent.",
-            {
-                "avg_push": feature_averages["push"],
-                "avg_formation": feature_averages["formation"],
+            "mobility_collapse": {
+                "summary": "Critical turns left the agent with fewer exact legal options or lower mobility.",
+                "score": 0.0,
+                "evidence": {"avg_mobility": feature_averages["mobility"], "turns": []},
             },
-        )
-
-    if feature_averages["center"] < -2.0:
-        add_reason(
-            "poor_center_control",
-            abs(feature_averages["center"]),
-            "The agent ceded too much central control over the course of the game.",
-            {"avg_center": feature_averages["center"]},
-        )
-
-    material_pressure = max(0.0, float(opponent_score - target_score)) + abs(min(feature_averages["marble"], 0.0))
-    if material_pressure > 0.0:
-        add_reason(
-            "material_loss",
-            material_pressure,
-            "The opponent converted the game into a material advantage.",
-            {
-                "target_score": target_score,
-                "opponent_score": opponent_score,
-                "capture_diff": capture_diff,
-                "avg_marble_feature": feature_averages["marble"],
+            "weak_push_threat": {
+                "summary": "Critical turns failed to preserve pressure, formations, or pushing threats.",
+                "score": 0.0,
+                "evidence": {"avg_push": feature_averages["push"], "avg_formation": feature_averages["formation"], "turns": []},
             },
-        )
-
-    depth_gap = max(0.0, (avg_requested_depth * 0.6) - avg_completed_depth)
-    instability_pressure = float(partial_searches) + (0.5 * float(unstable_decisions)) + depth_gap
-    if instability_pressure > 0.0:
-        add_reason(
-            "search_instability",
-            instability_pressure,
-            "The agent relied on partial or unstable search decisions too often.",
-            {
-                "partial_searches": partial_searches,
-                "unstable_decisions": unstable_decisions,
-                "avg_completed_depth": avg_completed_depth,
-                "avg_requested_depth": avg_requested_depth,
-                "avg_move_ms": avg_move_ms,
+            "poor_center_control": {
+                "summary": "Critical turns ceded too much center influence or positional balance.",
+                "score": 0.0,
+                "evidence": {"avg_center": feature_averages["center"], "turns": []},
             },
-        )
+            "material_loss": {
+                "summary": "The game drifted into a persistent material deficit.",
+                "score": max(0.0, float(opponent_score - target_score)) + abs(min(feature_averages["marble"], 0.0)),
+                "evidence": {
+                    "target_score": target_score,
+                    "opponent_score": opponent_score,
+                    "capture_diff": capture_diff,
+                    "avg_marble_feature": feature_averages["marble"],
+                    "turns": [],
+                },
+            },
+            "search_instability": {
+                "summary": "Critical turns relied on partial or unstable search decisions.",
+                "score": 0.0,
+                "evidence": {
+                    "partial_searches": partial_searches,
+                    "unstable_decisions": unstable_decisions,
+                    "avg_completed_depth": avg_completed_depth,
+                    "avg_requested_depth": avg_requested_depth,
+                    "avg_move_ms": avg_move_ms,
+                    "turns": [],
+                },
+            },
+        }
 
-    reasons.sort(key=lambda item: (-item["score"], item["code"]))
+        counterfactual_by_turn = {item["turn_index"]: item for item in counterfactuals}
+        for turn in critical_turns:
+            turn_index = int(turn["turn_index"])
+            post_features = turn["post_features"]
+            if post_features["edge_pressure"] < -1.0:
+                reason_map["edge_exposure"]["score"] += abs(post_features["edge_pressure"])
+                reason_map["edge_exposure"]["evidence"]["turns"].append(turn_index)
+            fragmentation_pressure = (
+                abs(min(post_features["cohesion"], 0.0))
+                + abs(min(post_features["cluster"], 0.0))
+                + abs(min(post_features["stability"], 0.0))
+            )
+            if fragmentation_pressure > 0.0:
+                reason_map["fragmentation"]["score"] += fragmentation_pressure
+                reason_map["fragmentation"]["evidence"]["turns"].append(turn_index)
+            mobility_pressure = max(0.0, float(turn["exact_legal_moves_before"] - turn["exact_legal_moves_after"]))
+            mobility_pressure += abs(min(post_features["mobility"], 0.0))
+            if mobility_pressure > 0.0:
+                reason_map["mobility_collapse"]["score"] += mobility_pressure
+                reason_map["mobility_collapse"]["evidence"]["turns"].append(turn_index)
+            push_pressure = abs(min(post_features["push"], 0.0)) + abs(min(post_features["formation"], 0.0))
+            if push_pressure > 0.0:
+                reason_map["weak_push_threat"]["score"] += push_pressure
+                reason_map["weak_push_threat"]["evidence"]["turns"].append(turn_index)
+            if post_features["center"] < -2.0:
+                reason_map["poor_center_control"]["score"] += abs(post_features["center"])
+                reason_map["poor_center_control"]["evidence"]["turns"].append(turn_index)
+            if turn["decision_source"] in PARTIAL_SEARCH_SOURCES or (
+                turn["decision_source"] == "repeat_avoidance" and turn["criticality"] > 0.0
+            ):
+                reason_map["search_instability"]["score"] += 1.0 + max(
+                    0.0,
+                    (float(turn["requested_depth"]) * 0.6) - float(turn["completed_depth"]),
+                )
+                reason_map["search_instability"]["evidence"]["turns"].append(turn_index)
+
+            counterfactual = counterfactual_by_turn.get(turn_index)
+            if counterfactual:
+                delta = counterfactual.get("feature_delta") or {}
+                reason_map["edge_exposure"]["score"] += max(0.0, float(delta.get("edge_pressure", 0.0)))
+                reason_map["fragmentation"]["score"] += max(0.0, float(delta.get("cohesion", 0.0))) + max(0.0, float(delta.get("cluster", 0.0))) + max(0.0, float(delta.get("stability", 0.0)))
+                reason_map["mobility_collapse"]["score"] += max(0.0, float(delta.get("mobility", 0.0)))
+                reason_map["weak_push_threat"]["score"] += max(0.0, float(delta.get("push", 0.0))) + max(0.0, float(delta.get("formation", 0.0)))
+                reason_map["poor_center_control"]["score"] += max(0.0, float(delta.get("center", 0.0)))
+                reason_map["material_loss"]["score"] += max(0.0, float(delta.get("marble", 0.0)))
+
+        for code, payload in reason_map.items():
+            if payload["score"] <= 0.0:
+                continue
+            payload["evidence"]["turns"] = sorted(set(payload["evidence"].get("turns", [])))
+            reasons.append(
+                {
+                    "code": code,
+                    "score": _round_float(payload["score"], 4),
+                    "summary": payload["summary"],
+                    "evidence": payload["evidence"],
+                }
+            )
+        reasons.sort(key=lambda item: (-item["score"], item["code"]))
+
+    for phase in phase_breakdown.values():
+        phase["criticality"] = _round_float(phase["criticality"], 4)
+
     return {
+        "analysis_version": CHECKPOINT_VERSION,
         "target_agent_id": target_agent_id,
         "opponent_id": opponent_id,
         "target_color": "black" if target_color == BLACK else "white",
         "outcome": outcome,
+        "tuning_outcome": tuning_outcome,
+        "weak_draw": weak_draw,
+        "drives_tuning": drives_tuning,
         "target_score": target_score,
         "opponent_score": opponent_score,
         "capture_diff": capture_diff,
         "feature_averages": feature_averages,
+        "feature_delta_summary": _feature_delta_summary(counterfactuals),
+        "phase_breakdown": phase_breakdown,
+        "critical_turns": [
+            {
+                "turn_index": turn["turn_index"],
+                "phase": turn["phase"],
+                "criticality": _round_float(turn["criticality"], 6),
+                "decision_source": turn["decision_source"],
+                "notation": turn.get("notation"),
+                "exact_legal_moves_before": turn["exact_legal_moves_before"],
+                "exact_legal_moves_after": turn["exact_legal_moves_after"],
+                "board_token_before": turn.get("board_token_before"),
+            }
+            for turn in critical_turns
+        ],
+        "counterfactual_summary": counterfactuals,
         "search_summary": {
             "move_count": len(target_entries),
             "partial_searches": partial_searches,
@@ -542,6 +870,7 @@ def analyze_match_result(game: dict, target_agent_id: str) -> dict:
             "avg_completed_depth": avg_completed_depth,
             "avg_requested_depth": avg_requested_depth,
             "avg_move_ms": avg_move_ms,
+            "late_material_avg": _round_float(late_material_avg, 4),
         },
         "reasons": reasons,
     }
@@ -550,9 +879,10 @@ def analyze_match_result(game: dict, target_agent_id: str) -> dict:
 def aggregate_iteration_analysis(match_records: Sequence[dict]) -> dict:
     """Aggregate per-game reasons into an iteration-level diagnosis."""
     aggregates = {}
+    feature_adjustments = {key: 0.0 for key in FEATURE_ORDER}
     for record in match_records:
         analysis = record["analysis"]
-        outcome_weight = OUTCOME_WEIGHTS[analysis["outcome"]]
+        outcome_weight = OUTCOME_WEIGHTS.get(analysis.get("tuning_outcome") or analysis["outcome"], 0.0)
         if outcome_weight <= 0.0:
             continue
         for reason in analysis["reasons"]:
@@ -571,8 +901,10 @@ def aggregate_iteration_analysis(match_records: Sequence[dict]) -> dict:
             bucket["weighted_score"] += float(reason["score"]) * outcome_weight
             bucket["occurrences"] += 1
             bucket["losses"] += 1 if analysis["outcome"] == "loss" else 0
-            bucket["draws"] += 1 if analysis["outcome"] == "draw" else 0
+            bucket["draws"] += 1 if analysis.get("weak_draw") else 0
             bucket["opponents"].add(analysis["opponent_id"])
+        for key, value in (analysis.get("feature_delta_summary") or {}).items():
+            feature_adjustments[key] = feature_adjustments.get(key, 0.0) + (float(value or 0.0) * outcome_weight)
 
     top_reasons = []
     for bucket in aggregates.values():
@@ -596,37 +928,40 @@ def aggregate_iteration_analysis(match_records: Sequence[dict]) -> dict:
             item["code"],
         )
     )
-    return {"top_reasons": top_reasons}
+    return {
+        "top_reasons": top_reasons,
+        "feature_delta_summary": {
+            key: _round_float(value, 6)
+            for key, value in feature_adjustments.items()
+            if abs(value) > 1e-9
+        },
+    }
 
 
-def score_iteration(match_records: Sequence[dict]) -> dict:
-    """Score one full gauntlet using the lexicographic objective."""
-    wins = sum(1 for record in match_records if record["analysis"]["outcome"] == "win")
-    draws = sum(1 for record in match_records if record["analysis"]["outcome"] == "draw")
-    losses = sum(1 for record in match_records if record["analysis"]["outcome"] == "loss")
+def _score_subset(match_records: Sequence[dict], split: Optional[str] = None) -> dict:
+    relevant = [
+        record
+        for record in match_records
+        if split is None or record.get("schedule_split", "train") == split
+    ]
+    wins = sum(1 for record in relevant if record["analysis"]["outcome"] == "win")
+    draws = sum(1 for record in relevant if record["analysis"]["outcome"] == "draw")
+    losses = sum(1 for record in relevant if record["analysis"]["outcome"] == "loss")
     match_points = (wins * 2) + draws
-    capture_diff = sum(int(record["analysis"]["capture_diff"]) for record in match_records)
-    partial_searches = sum(int(record["analysis"]["search_summary"]["partial_searches"]) for record in match_records)
+    capture_diff = sum(int(record["analysis"]["capture_diff"]) for record in relevant)
+    partial_searches = sum(int(record["analysis"]["search_summary"]["partial_searches"]) for record in relevant)
 
-    total_target_moves = sum(int(record["analysis"]["search_summary"]["move_count"]) for record in match_records)
+    total_target_moves = sum(int(record["analysis"]["search_summary"]["move_count"]) for record in relevant)
     total_depth = sum(
         float(record["analysis"]["search_summary"]["avg_completed_depth"]) * int(record["analysis"]["search_summary"]["move_count"])
-        for record in match_records
+        for record in relevant
     )
     total_move_ms = sum(
         float(record["analysis"]["search_summary"]["avg_move_ms"]) * int(record["analysis"]["search_summary"]["move_count"])
-        for record in match_records
+        for record in relevant
     )
     avg_completed_depth = _round_float(total_depth / total_target_moves, 4) if total_target_moves else 0.0
     avg_move_ms = _round_float(total_move_ms / total_target_moves, 3) if total_target_moves else 0.0
-
-    comparison_key = [
-        int(match_points),
-        int(capture_diff),
-        -int(partial_searches),
-        float(avg_completed_depth),
-        -float(avg_move_ms),
-    ]
     return {
         "wins": wins,
         "draws": draws,
@@ -636,22 +971,53 @@ def score_iteration(match_records: Sequence[dict]) -> dict:
         "partial_searches": partial_searches,
         "avg_completed_depth": avg_completed_depth,
         "avg_move_ms": avg_move_ms,
-        "comparison_key": comparison_key,
+        "games": len(relevant),
     }
 
 
-def _score_tuple(score: Optional[dict]) -> Optional[Tuple[float, ...]]:
+def _validation_tuple(score: Optional[dict]) -> Optional[Tuple[float, ...]]:
     if score is None:
         return None
-    return tuple(score["comparison_key"])
+    return (
+        int(score["match_points"]),
+        int(score["capture_diff"]),
+        -int(score["partial_searches"]),
+        float(score["avg_completed_depth"]),
+        -float(score["avg_move_ms"]),
+    )
+
+
+def score_iteration(match_records: Sequence[dict]) -> dict:
+    """Score one full tuning iteration with explicit train/validation splits."""
+    training = _score_subset(match_records, "train")
+    validation = _score_subset(match_records, "validation")
+    overall = _score_subset(match_records, None)
+    return {
+        "training": training,
+        "validation": validation,
+        "overall": overall,
+        "comparison_key": {
+            "training_match_points": int(training["match_points"]),
+            "validation": _validation_tuple(validation),
+        },
+    }
 
 
 def is_better_score(candidate: dict, incumbent: Optional[dict]) -> bool:
-    """Return whether a candidate gauntlet score beats the incumbent score."""
-    incumbent_key = _score_tuple(incumbent)
-    if incumbent_key is None:
+    """Apply the explicit train/validation acceptance rule."""
+    if incumbent is None:
         return True
-    return _score_tuple(candidate) > incumbent_key
+    candidate_training = candidate["training"]
+    incumbent_training = incumbent["training"]
+    if int(candidate_training["match_points"]) <= int(incumbent_training["match_points"]):
+        return False
+    candidate_validation = _validation_tuple(candidate["validation"])
+    incumbent_validation = _validation_tuple(incumbent["validation"])
+    if candidate_validation is None:
+        return True
+    if incumbent_validation is None:
+        return True
+    return candidate_validation >= incumbent_validation
 
 
 def determine_phase(iteration_index: int, total_iterations: int, stagnation_count: int) -> str:
@@ -669,6 +1035,7 @@ def propose_next_weights(
     current_weights: Dict[str, float],
     best_weights: Dict[str, float],
     top_reasons: Sequence[dict],
+    feature_delta_summary: Optional[Dict[str, float]],
     iteration_index: int,
     total_iterations: int,
     stagnation_count: int,
@@ -682,14 +1049,26 @@ def propose_next_weights(
     proposed = dict(base_multipliers)
     phase_scale = PHASE_STEP_SCALES[phase]
     jitter_scale = PHASE_JITTER_SCALES[phase]
+    evidence_applied = False
 
-    for reason in top_reasons[:3]:
-        directions = REASON_TO_WEIGHT_DIRECTIONS.get(reason["code"], {})
-        strength = min(2.0, max(0.25, float(reason["weighted_score"]) / max(1.0, 4.0 * float(reason["occurrences"]))))
-        for key, direction in directions.items():
-            rules = WEIGHT_TUNING_RULES[key]
-            delta = direction * rules["step"] * phase_scale * strength
-            proposed[key] *= 1.0 + delta
+    for key, delta_value in (feature_delta_summary or {}).items():
+        if key not in WEIGHT_TUNING_RULES:
+            continue
+        rules = WEIGHT_TUNING_RULES[key]
+        strength = max(-1.5, min(1.5, float(delta_value) / 12.0))
+        if abs(strength) <= 1e-9:
+            continue
+        proposed[key] *= 1.0 + (rules["step"] * phase_scale * 0.35 * strength)
+        evidence_applied = True
+
+    if not evidence_applied:
+        for reason in top_reasons[:3]:
+            directions = REASON_TO_WEIGHT_DIRECTIONS.get(reason["code"], {})
+            strength = min(2.0, max(0.25, float(reason["weighted_score"]) / max(1.0, 4.0 * float(reason["occurrences"]))))
+            for key, direction in directions.items():
+                rules = WEIGHT_TUNING_RULES[key]
+                delta = direction * rules["step"] * phase_scale * strength
+                proposed[key] *= 1.0 + delta
 
     for index, key in enumerate(FEATURE_ORDER):
         rules = WEIGHT_TUNING_RULES[key]
@@ -739,10 +1118,12 @@ def _initial_state(config: dict, baseline_weights: Dict[str, float], run_dir: Pa
     checkpoint_path = run_dir / "checkpoint.json"
     matches_path = run_dir / "matches.jsonl"
     iterations_path = run_dir / "iterations.jsonl"
+    critical_positions_path = run_dir / "critical_positions.jsonl"
     baseline_weights = normalize_weights(baseline_weights)
     baseline_multipliers = {key: 1.0 for key in FEATURE_ORDER}
     return {
         "version": CHECKPOINT_VERSION,
+        "analysis_version": CHECKPOINT_VERSION,
         "status": "running",
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
@@ -752,9 +1133,11 @@ def _initial_state(config: dict, baseline_weights: Dict[str, float], run_dir: Pa
             "checkpoint": str(checkpoint_path.resolve()),
             "matches": str(matches_path.resolve()),
             "iterations": str(iterations_path.resolve()),
+            "critical_positions": str(critical_positions_path.resolve()),
         },
         "baseline_weights": {key: _round_float(baseline_weights[key], 6) for key in FEATURE_ORDER},
         "baseline_multipliers": baseline_multipliers,
+        "analysis_weights": {key: _round_float(baseline_weights[key], 6) for key in FEATURE_ORDER},
         "current_weights": {key: _round_float(baseline_weights[key], 6) for key in FEATURE_ORDER},
         "current_multipliers": dict(baseline_multipliers),
         "best_weights": {key: _round_float(baseline_weights[key], 6) for key in FEATURE_ORDER},
@@ -767,10 +1150,13 @@ def _initial_state(config: dict, baseline_weights: Dict[str, float], run_dir: Pa
             "current_iteration": None,
             "completed_matches_total": 0,
             "current_iteration_matches": 0,
-            "matches_per_iteration": len(config["opponents"]) * 2,
+            "matches_per_iteration": int(config["games_per_iteration"]),
         },
         "active_iteration": None,
         "iteration_summaries": [],
+        "train_schedule": [],
+        "validation_schedule": [],
+        "fixed_position_suite_result": None,
         "timing": {
             "started_at": _utc_now(),
             "completed_at": None,
@@ -791,7 +1177,12 @@ def load_checkpoint(path: str) -> dict:
     """Load a checkpoint from disk."""
     checkpoint_path = Path(path)
     with checkpoint_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        state = json.load(handle)
+    if int(state.get("version", 1)) != CHECKPOINT_VERSION:
+        raise ValueError(
+            f"Checkpoint version {state.get('version', 1)} is not supported by this evaluation pipeline."
+        )
+    return state
 
 
 def _build_run_dir(config: dict, runs_root: Optional[Path]) -> Path:
@@ -802,8 +1193,10 @@ def _build_run_dir(config: dict, runs_root: Optional[Path]) -> Path:
 
 def _build_match_log_record(iteration_index: int, game: dict, analysis: dict) -> dict:
     return {
+        "analysis_version": analysis.get("analysis_version", CHECKPOINT_VERSION),
         "iteration": iteration_index,
         "game_index": game["index"],
+        "schedule_split": game.get("schedule_split", "train"),
         "black_ai_id": game["black_ai_id"],
         "white_ai_id": game["white_ai_id"],
         "opponent_id": analysis["opponent_id"],
@@ -820,9 +1213,55 @@ def _build_match_log_record(iteration_index: int, game: dict, analysis: dict) ->
         "duration_s": _round_float(game["duration_s"], 4),
         "time_used_ms": game.get("time_used_ms", {BLACK: 0, WHITE: 0}),
         "feature_averages": analysis["feature_averages"],
+        "feature_delta_summary": analysis.get("feature_delta_summary", {}),
+        "phase_breakdown": analysis.get("phase_breakdown", {}),
+        "critical_turns": analysis.get("critical_turns", []),
+        "counterfactual_summary": analysis.get("counterfactual_summary", []),
         "telemetry_summary": analysis["search_summary"],
+        "weak_draw": analysis.get("weak_draw", False),
+        "tuning_outcome": analysis.get("tuning_outcome", analysis["outcome"]),
         "reasons": analysis["reasons"],
         "analysis": analysis,
+    }
+
+
+def _load_board_from_input(path: Path) -> Tuple[Board, int]:
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    player = BLACK if lines[0].lower().startswith("b") else WHITE
+    board = Board()
+    board.clear()
+    if len(lines) > 1:
+        for token in lines[1].split(","):
+            token = token.strip()
+            if not token:
+                continue
+            pos = token[:-1]
+            color = token[-1].lower()
+            board.cells[(ord(pos[0].lower()) - ord("a"), int(pos[1:]))] = BLACK if color == "b" else WHITE
+    board.recompute_zhash()
+    return board, player
+
+
+def _run_fixed_position_suite(weights: Dict[str, float]) -> dict:
+    cases = []
+    suite_dir = Path("abalone") / "state_space_inputs"
+    for case_name in ("Test1.input", "Test2.input", "Test3.input"):
+        path = suite_dir / case_name
+        if not path.exists():
+            continue
+        board, player = _load_board_from_input(path)
+        breakdown = evaluate_breakdown(board, player, weights)
+        cases.append(
+            {
+                "case": case_name,
+                "player": "black" if player == BLACK else "white",
+                "total": _round_float(breakdown["total"], 6),
+                "legal_moves": len(generate_legal_moves(board, player)),
+            }
+        )
+    return {
+        "cases": cases,
+        "average_total": _round_float(_mean([float(case["total"]) for case in cases]), 6) if cases else 0.0,
     }
 
 
@@ -852,10 +1291,21 @@ def _format_elapsed_time(seconds: float) -> str:
 
 
 def _prepare_resume_state(state: dict, iterations: int, jobs: Optional[int]) -> dict:
+    if int(state.get("version", 1)) != CHECKPOINT_VERSION:
+        raise ValueError(
+            f"Resume is only supported for checkpoint version {CHECKPOINT_VERSION}; found {state.get('version', 1)}."
+        )
     state["config"]["iterations"] = max(int(iterations), int(state["config"]["iterations"]))
     if jobs is not None:
         state["config"]["jobs"] = int(jobs)
+    state.setdefault("analysis_version", CHECKPOINT_VERSION)
+    state.setdefault("analysis_weights", dict(state.get("baseline_weights", {})))
+    state.setdefault("train_schedule", [])
+    state.setdefault("validation_schedule", [])
+    state.setdefault("fixed_position_suite_result", None)
     state.setdefault("iteration_summaries", [])
+    state.setdefault("progress", {})
+    state["progress"].setdefault("matches_per_iteration", int(state["config"].get("games_per_iteration", 0)))
     state.setdefault(
         "timing",
         {
@@ -955,6 +1405,7 @@ def _build_final_summary(state: dict) -> dict:
         "layout": state["config"]["layout"],
         "max_moves": int(state["config"]["max_moves"]),
         "weight_changes": _weight_change_summary(state["baseline_weights"], state["best_weights"]),
+        "fixed_position_suite_result": state.get("fixed_position_suite_result"),
     }
 def _run_tuning_iteration_runner(
     runner: Callable,
@@ -1033,6 +1484,9 @@ def run_tuning_loop(
             "jobs": jobs,
             "iterations": int(iterations),
             "opponents": opponents,
+            "training_seed_pairs": TRAINING_SEED_PAIRS,
+            "validation_seed_pairs": VALIDATION_SEED_PAIRS,
+            "games_per_iteration": len(opponents) * 2 * (TRAINING_SEED_PAIRS + VALIDATION_SEED_PAIRS),
         }
         run_dir = _build_run_dir(config, runs_root)
         state = _initial_state(config, baseline_weights, run_dir)
@@ -1043,6 +1497,7 @@ def run_tuning_loop(
     total_iterations = int(state["config"]["iterations"])
     matches_path = Path(state["paths"]["matches"])
     iterations_path = Path(state["paths"]["iterations"])
+    critical_positions_path = Path(state["paths"]["critical_positions"])
 
     next_iteration = int(state["progress"]["completed_iterations"]) + 1
     active_iteration = state.get("active_iteration")
@@ -1050,23 +1505,46 @@ def run_tuning_loop(
         next_iteration = int(active_iteration["index"])
 
     while next_iteration <= total_iterations:
-        scheduled_games = build_all_opponents_jobs(
+        schedules = build_tuning_jobs(
             agent_id=agent_id,
             depth=state["config"]["depth"],
             layout=state["config"]["layout"],
             move_time_s=state["config"]["move_time_s"],
             max_moves=state["config"]["max_moves"],
-            seed=state["config"]["seed"] + ((next_iteration - 1) * (len(state["config"]["opponents"]) * 2)),
+            seed=state["config"]["seed"] + ((next_iteration - 1) * int(state["config"]["games_per_iteration"])),
+            opponents=state["config"]["opponents"],
+            training_seed_pairs=int(state["config"].get("training_seed_pairs", TRAINING_SEED_PAIRS)),
+            validation_seed_pairs=int(state["config"].get("validation_seed_pairs", VALIDATION_SEED_PAIRS)),
         )
+        scheduled_games = list(schedules["train"]) + list(schedules["validation"])
         worker_count = resolve_worker_count(state["config"].get("jobs"), len(scheduled_games))
         candidate_weights = normalize_weights(state["current_weights"])
         candidate_multipliers = weights_to_multipliers(candidate_weights, state["baseline_weights"])
         best_weights_before = normalize_weights(state["best_weights"])
         best_score_before = state.get("best_score")
+        fixed_position_suite_result = _run_fixed_position_suite(candidate_weights)
 
         state["status"] = "running"
         state["progress"]["current_iteration"] = next_iteration
         state["progress"]["current_iteration_matches"] = 0
+        state["train_schedule"] = [
+            {
+                "index": job["index"],
+                "opponent_id": _opponent_for_game(job, agent_id),
+                "opening_seed": job["opening_seed"],
+                "agent_color": job["agent_color"],
+            }
+            for job in schedules["train"]
+        ]
+        state["validation_schedule"] = [
+            {
+                "index": job["index"],
+                "opponent_id": _opponent_for_game(job, agent_id),
+                "opening_seed": job["opening_seed"],
+                "agent_color": job["agent_color"],
+            }
+            for job in schedules["validation"]
+        ]
         state["active_iteration"] = {
             "index": next_iteration,
             "status": "running",
@@ -1083,10 +1561,27 @@ def run_tuning_loop(
             announce(message)
 
         def on_game_complete(completed: int, total: int, game: dict) -> None:
-            analysis = analyze_match_result(game, agent_id)
+            analysis = analyze_match_result(
+                game,
+                agent_id,
+                analysis_weights=normalize_weights(state.get("analysis_weights", state["baseline_weights"])),
+                fallback_analysis_weights=normalize_weights(state["best_weights"]),
+            )
             record = _build_match_log_record(next_iteration, game, analysis)
             match_records.append(record)
             _append_jsonl(matches_path, record)
+            for critical in analysis.get("counterfactual_summary", []):
+                _append_jsonl(
+                    critical_positions_path,
+                    {
+                        "analysis_version": CHECKPOINT_VERSION,
+                        "iteration": next_iteration,
+                        "game_index": game["index"],
+                        "opponent_id": analysis["opponent_id"],
+                        "target_color": analysis["target_color"],
+                        **critical,
+                    },
+                )
             state["progress"]["completed_matches_total"] += 1
             state["progress"]["current_iteration_matches"] = completed
             state["latest_analyses"] = analysis["reasons"][:3]
@@ -1122,12 +1617,16 @@ def run_tuning_loop(
 
         aggregate = aggregate_iteration_analysis(match_records)
         score = score_iteration(match_records)
-        win_rate = _iteration_win_rate(score, len(scheduled_games))
+        overall_score = score["overall"]
+        training_score = score["training"]
+        validation_score = score["validation"]
+        win_rate = _iteration_win_rate(overall_score, len(scheduled_games))
         improved = is_better_score(score, best_score_before)
         if improved:
             state["best_weights"] = {key: _round_float(candidate_weights[key], 6) for key in FEATURE_ORDER}
             state["best_multipliers"] = {key: _round_float(candidate_multipliers[key], 6) for key in FEATURE_ORDER}
             state["best_score"] = score
+            state["fixed_position_suite_result"] = fixed_position_suite_result
             state["stagnation_count"] = 0
         else:
             state["stagnation_count"] = int(state.get("stagnation_count", 0)) + 1
@@ -1137,8 +1636,13 @@ def run_tuning_loop(
             "phase": state["active_iteration"]["phase"],
             "accepted_as_best": improved,
             "score": score,
+            "training_score": training_score,
+            "validation_score": validation_score,
+            "overall_score": overall_score,
             "win_rate": win_rate,
             "top_reasons": aggregate["top_reasons"][:5],
+            "feature_delta_summary": aggregate.get("feature_delta_summary", {}),
+            "fixed_position_suite_result": fixed_position_suite_result,
             "candidate_weights": {key: _round_float(candidate_weights[key], 6) for key in FEATURE_ORDER},
             "candidate_multipliers": {key: _round_float(candidate_multipliers[key], 6) for key in FEATURE_ORDER},
             "weight_diff_from_previous_best": _weight_delta(candidate_weights, best_weights_before),
@@ -1152,11 +1656,13 @@ def run_tuning_loop(
         state["iteration_summaries"].append(
             {
                 "iteration": next_iteration,
-                "wins": score["wins"],
-                "draws": score["draws"],
-                "losses": score["losses"],
-                "match_points": score["match_points"],
-                "capture_diff": score["capture_diff"],
+                "wins": overall_score["wins"],
+                "draws": overall_score["draws"],
+                "losses": overall_score["losses"],
+                "match_points": overall_score["match_points"],
+                "capture_diff": overall_score["capture_diff"],
+                "training_match_points": training_score["match_points"],
+                "validation_match_points": validation_score["match_points"],
                 "win_rate": win_rate,
                 "accepted_as_best": improved,
             }
@@ -1171,8 +1677,8 @@ def run_tuning_loop(
 
         announce(
             f"[Iteration {next_iteration}/{total_iterations}] "
-            f"W={score['wins']} D={score['draws']} L={score['losses']} "
-            f"capture_diff={score['capture_diff']} partial_searches={score['partial_searches']} "
+            f"W={overall_score['wins']} D={overall_score['draws']} L={overall_score['losses']} "
+            f"capture_diff={overall_score['capture_diff']} partial_searches={overall_score['partial_searches']} "
             f"{'accepted' if improved else 'rejected'}."
         )
 
@@ -1210,6 +1716,7 @@ def run_tuning_loop(
             current_weights=candidate_weights,
             best_weights=normalize_weights(state["best_weights"]),
             top_reasons=aggregate["top_reasons"],
+            feature_delta_summary=aggregate.get("feature_delta_summary", {}),
             iteration_index=next_iteration + 1,
             total_iterations=total_iterations,
             stagnation_count=int(state.get("stagnation_count", 0)),

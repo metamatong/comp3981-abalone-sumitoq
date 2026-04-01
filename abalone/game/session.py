@@ -253,6 +253,13 @@ class GameSession:
         duration_ms = max(0, now - self.turn_start_us) // 1000
 
         result = self.board.apply_move(move, player)
+        if agent_id and search is not None and agent_id in self.telemetry_agent_ids:
+            runtime_agent = resolve_agent_for_runtime(agent_id, self.agent_weight_overrides)
+            search.setdefault("board_token_before", snapshot.to_compact_token())
+            search["board_token_after"] = self.board.to_compact_token()
+            post_move = self._build_agent_telemetry(runtime_agent, player)
+            if post_move is not None:
+                search["post_move"] = post_move
         moved_to = self._moved_positions(move, result)
         self.move_history.append(
             {
@@ -368,6 +375,7 @@ class GameSession:
         time_budget_ms = self._current_turn_budget_ms()
         avoid_move = self._repeat_move_to_avoid()
         pre_move = self._build_agent_telemetry(agent, self.current_player)
+        board_token_before = self.board.to_compact_token() if agent.id in self.telemetry_agent_ids else None
         search_result = choose_move_with_info(
             self.board,
             self.current_player,
@@ -378,11 +386,14 @@ class GameSession:
                 opening_seed=self.opening_seed,
                 is_opening_turn=(self.current_player == BLACK and not self.move_history),
                 avoid_move=avoid_move,
+                board_token_before=board_token_before,
             ),
         )
         search_payload = search_result.as_dict()
         if pre_move is not None:
             search_payload["pre_move"] = pre_move
+        if board_token_before is not None:
+            search_payload["board_token_before"] = board_token_before
 
         move = search_result.move
         ok, error = validate_move(self.board, self.current_player, move)

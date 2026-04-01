@@ -262,6 +262,40 @@ class Board:
         b.zhash = self.zhash
         return b
 
+    def to_compact_token(self) -> str:
+        """Serialize occupied cells plus capture score into a compact deterministic token."""
+        occupied = []
+        for pos in sorted(self.cells):
+            color = self.cells[pos]
+            if color == EMPTY:
+                continue
+            occupied.append(f"{pos_to_str(pos)}{'b' if color == BLACK else 'w'}")
+        return f"{','.join(occupied)}|{self.score[BLACK]}-{self.score[WHITE]}"
+
+    @classmethod
+    def from_compact_token(cls, token: str) -> 'Board':
+        """Rebuild a board from ``to_compact_token`` output."""
+        board = cls()
+        board.clear()
+        token = str(token or "").strip()
+        if not token:
+            return board
+
+        occupied_part, _, score_part = token.partition("|")
+        if occupied_part:
+            for item in occupied_part.split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                color_char = item[-1].lower()
+                pos = str_to_pos(item[:-1])
+                board.cells[pos] = BLACK if color_char == "b" else WHITE
+        if score_part:
+            black_score, white_score = score_part.split("-", 1)
+            board.score = {BLACK: int(black_score), WHITE: int(white_score)}
+        board.recompute_zhash()
+        return board
+
     def get(self, pos: Position) -> Optional[int]:
         """Return marble color at a coordinate, or `None` for unknown coordinates."""
         return self.cells.get(pos)
