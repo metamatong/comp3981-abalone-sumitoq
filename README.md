@@ -60,6 +60,14 @@ The web server automatically tries nearby ports if the requested one is busy.
 
 No external dependencies - runs on Python 3.8+ standard library only.
 
+## Create Executable
+
+To build a standalone Windows executable with PyInstaller, run:
+
+```bash
+py -3.13 -m PyInstaller --noconfirm --clean --name SumitoQ --onefile run.py --add-data "abalone\static;abalone\static"
+```
+
 ## CLI Usage
 
 The terminal entrypoint is:
