@@ -9,7 +9,7 @@ AGENTS = [
         label="Tournament: Standard",
         owner="Tournament",
         evaluator=evaluate_standard,
-        default_depth=3,
+        default_depth=4,
         tie_break="lexicographic",
     )
 ]
