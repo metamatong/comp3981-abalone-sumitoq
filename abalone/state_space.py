@@ -72,55 +72,59 @@ def generate_legal_moves(board: Board, player: int) -> List[Move]:
     seen: Set[Tuple[Tuple[Position, ...], Direction]] = set()
     marbles = board.get_marbles(player)
     marble_set = set(marbles)
+    add_move = moves.append
+    seen_add = seen.add
+    is_legal = board.is_generated_move_legal_raw
+    ref_dirs = REFERENCE_DIRECTIONS
+    next_neighbor = neighbor
 
-    def _add(marbles_list, direction):
+    def _add(marbles_tuple: Tuple[Position, ...], direction: Direction) -> None:
         """Insert a move candidate once, then keep only legal candidates.
 
-        :param marbles_list: List of (row, col) positions for the marbles in the move.
+        :param marbles_tuple: Tuple of (row, col) positions for the marbles in the move.
         :param direction: (dr, dc) direction tuple for the move.
         """
-        canonical_marbles = _canonicalize_marbles(tuple(marbles_list))
+        canonical_marbles = _canonicalize_marbles(marbles_tuple)
         key = (canonical_marbles, direction)
         if key in seen:
             return
 
-        seen.add(key)
-        move = Move.from_canonical(canonical_marbles, direction)
-        if board.is_generated_move_legal(move, player):
-            moves.append(move)
+        seen_add(key)
+        if is_legal(canonical_marbles, direction, player):
+            add_move(Move.from_canonical(canonical_marbles, direction))
 
     # --- Pass 1: inline moves (trailing-marble enumeration) ---
     # This determines the canonical ordering for inline moves.
     for marble in marbles:
-        for direction in REFERENCE_DIRECTIONS:
+        for direction in ref_dirs:
             # 1-stone move
-            _add([marble], direction)
+            _add((marble,), direction)
 
             # 2-stone inline: extend forward from trailing marble
-            fwd1 = neighbor(marble, direction)
+            fwd1 = next_neighbor(marble, direction)
             if fwd1 in marble_set:
-                _add([marble, fwd1], direction)
+                _add((marble, fwd1), direction)
 
                 # 3-stone inline: extend one more step forward
-                fwd2 = neighbor(fwd1, direction)
+                fwd2 = next_neighbor(fwd1, direction)
                 if fwd2 in marble_set:
-                    _add([marble, fwd1, fwd2], direction)
+                    _add((marble, fwd1, fwd2), direction)
 
     # --- Pass 2: broadside moves ---
     # Find pairs/triples along each line axis and try all directions.
     # The ``seen`` set ensures inline moves from pass 1 are not duplicated.
     for marble in marbles:
         for line_dir in POSITIVE_DIRS:
-            second = neighbor(marble, line_dir)
+            second = next_neighbor(marble, line_dir)
             if second in marble_set:
-                pair = [marble, second]
-                for direction in REFERENCE_DIRECTIONS:
+                pair = (marble, second)
+                for direction in ref_dirs:
                     _add(pair, direction)
 
-                third = neighbor(second, line_dir)
+                third = next_neighbor(second, line_dir)
                 if third in marble_set:
-                    triple = [marble, second, third]
-                    for direction in REFERENCE_DIRECTIONS:
+                    triple = (marble, second, third)
+                    for direction in ref_dirs:
                         _add(triple, direction)
 
     return moves

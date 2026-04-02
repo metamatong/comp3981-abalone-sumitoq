@@ -3,6 +3,7 @@ import io
 import re
 import time
 import unittest
+from unittest import mock
 
 from abalone.ai.agent import choose_move, choose_move_with_info
 from abalone.ai.heuristics import evaluate_board
@@ -293,6 +294,48 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("Completed 1 round(s), 2 game(s).", output_one)
         self.assertIn("default:", output_one)
         self.assertIn("kyle:", output_one)
+
+    def test_match_summary_counts_partial_search_sources(self):
+        fake_game = {
+            "winner": BLACK,
+            "reason": "max_moves",
+            "history": [
+                {
+                    "agent_id": "default",
+                    "duration_ms": 10,
+                    "search": {"completed_depth": 0, "decision_source": "timeout_fallback_partial"},
+                },
+                {
+                    "agent_id": "kyle",
+                    "duration_ms": 12,
+                    "search": {"completed_depth": 1, "decision_source": "search"},
+                },
+                {
+                    "agent_id": "default",
+                    "duration_ms": 11,
+                    "search": {"completed_depth": 1, "decision_source": "timeout_partial"},
+                },
+            ],
+            "score": {BLACK: 2, WHITE: 1},
+            "black_ai_id": "default",
+            "white_ai_id": "kyle",
+        }
+
+        with mock.patch("abalone.game.match._run_game", side_effect=[fake_game, fake_game]):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                match_main(
+                    [
+                        "--black-ai", "default",
+                        "--white-ai", "kyle",
+                        "--rounds", "1",
+                        "--depth", "1",
+                    ]
+                )
+
+        output = stdout.getvalue()
+        self.assertIn("partial_searches=4", output)
+        self.assertIn("kyle: W=0 L=2 D=0 captures=2 partial_searches=0", output)
 
 
 if __name__ == "__main__":

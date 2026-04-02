@@ -215,6 +215,7 @@ class Move:
     _is_inline: bool = field(init=False, repr=False, compare=False)
     _leading: Position = field(init=False, repr=False, compare=False)
     _trailing: Position = field(init=False, repr=False, compare=False)
+    _ordering_key: Tuple[int, Position, int, Position, str] = field(init=False, repr=False, compare=False)
     _notation_plain: Optional[str] = field(init=False, repr=False, compare=False, default=None)
     _notation_pushed: Optional[str] = field(init=False, repr=False, compare=False, default=None)
 
@@ -255,6 +256,22 @@ class Move:
 
         leading = ordered_marbles[-1]
         trailing = ordered_marbles[0]
+        if is_inline:
+            ordering_key = (
+                count,
+                trailing,
+                1,
+                neighbor(leading, direction),
+                "",
+            )
+        else:
+            ordering_key = (
+                count,
+                sorted_marbles[0],
+                0,
+                sorted_marbles[-1],
+                DIRECTION_NAMES[direction],
+            )
 
         object.__setattr__(self, "marbles", sorted_marbles)
         object.__setattr__(self, "direction", direction)
@@ -265,6 +282,7 @@ class Move:
         object.__setattr__(self, "_is_inline", is_inline)
         object.__setattr__(self, "_leading", leading)
         object.__setattr__(self, "_trailing", trailing)
+        object.__setattr__(self, "_ordering_key", ordering_key)
         object.__setattr__(self, "_notation_plain", None)
         object.__setattr__(self, "_notation_pushed", None)
 
@@ -281,6 +299,11 @@ class Move:
     def leading_trailing(self):
         """Return (trailing, leading) marble based on movement direction."""
         return self._trailing, self._leading
+
+    @property
+    def ordering_key(self) -> Tuple[int, Position, int, Position, str]:
+        """Return a deterministic sort key equivalent to plain notation order."""
+        return self._ordering_key
 
     def to_notation(self, pushed=False) -> str:
         """Return CLI/web notation for the move, optionally marking push candidates."""
@@ -464,6 +487,29 @@ class Board:
         """Validate a generated move when ownership and formation are already guaranteed."""
         return self._is_directionally_legal(move, player)
 
+    def is_generated_move_legal_raw(
+        self,
+        marbles: Tuple[Position, ...],
+        direction: Direction,
+        player: int,
+    ) -> bool:
+        """Validate a generated move candidate without constructing a `Move` first."""
+        direction_index = DIRECTION_INDEX[direction]
+        count = len(marbles)
+        if count <= 1:
+            return self._check_single_raw(marbles[0], direction_index)
+
+        line_dir = (
+            marbles[1][0] - marbles[0][0],
+            marbles[1][1] - marbles[0][1],
+        )
+        if direction == line_dir or direction == OPPOSITE_DIRECTION.get(line_dir, opposite_dir(line_dir)):
+            leading = marbles[-1] if direction == line_dir else marbles[0]
+            opponent = WHITE if player == BLACK else BLACK
+            return self._check_inline_raw(leading, count, direction_index, player, opponent)
+
+        return self._check_broadside_raw(marbles, direction_index)
+
     def _owns_marbles(self, marbles: Tuple[Position, ...], player: int) -> bool:
         """Return whether all selected coordinates belong to the given player."""
         cells = self.cells
@@ -490,15 +536,26 @@ class Board:
         """Validate the occupancy and push rules once shape has been established."""
         opponent = WHITE if player == BLACK else BLACK
         if move.is_inline:
-            return self._check_inline(move, player, opponent)
-        return self._check_broadside(move)
+            return self._check_inline_raw(move._leading, move.count, DIRECTION_INDEX[move.direction], player, opponent)
+        return self._check_broadside_raw(move.marbles, DIRECTION_INDEX[move.direction])
 
-    def _check_inline(self, move: Move, player: int, opponent: int) -> bool:
+    def _check_single_raw(self, marble: Position, direction_index: int) -> bool:
+        """Validate a generated single-marble move."""
+        cells = self.cells
+        ahead = NEIGHBOR_TABLE[marble][direction_index]
+        return ahead is not None and cells[ahead] == EMPTY
+
+    def _check_inline_raw(
+        self,
+        leading: Position,
+        count: int,
+        direction_index: int,
+        player: int,
+        opponent: int,
+    ) -> bool:
         """Validate an inline move, including sumito push rules."""
         cells = self.cells
-        d = move.direction
-        direction_index = DIRECTION_INDEX[d]
-        ahead = NEIGHBOR_TABLE[move._leading][direction_index]
+        ahead = NEIGHBOR_TABLE[leading][direction_index]
 
         if ahead is None:
             return False  # can't move own marble off board
@@ -518,7 +575,7 @@ class Board:
             pos = NEIGHBOR_TABLE[pos][direction_index]
 
         # Must outnumber
-        if pushed_count >= move.count:
+        if pushed_count >= count:
             return False
 
         # Space after pushed marbles must be empty or off-board
@@ -527,12 +584,11 @@ class Board:
 
         return True
 
-    def _check_broadside(self, move: Move) -> bool:
+    def _check_broadside_raw(self, marbles: Tuple[Position, ...], direction_index: int) -> bool:
         """Validate broadside movement where every destination must be empty and valid."""
         cells = self.cells
         neighbors = NEIGHBOR_TABLE
-        direction_index = DIRECTION_INDEX[move.direction]
-        for m in move.marbles:
+        for m in marbles:
             dest = neighbors[m][direction_index]
             if dest is None:
                 return False

@@ -22,6 +22,7 @@ from abalone.file_handler import (
 from abalone.state_space import (
     dump_position_list_state,
     generate_legal_moves,
+    generate_move_notation_strings,
     generate_next_states,
     load_position_list_state,
 )
@@ -240,6 +241,27 @@ class StateSpaceFileTests(unittest.TestCase):
             for move in generate_legal_moves(board, player):
                 self.assertTrue(board.is_generated_move_legal(move, player))
                 self.assertTrue(board.is_legal_move(move, player))
+
+    def test_state_space_fixture_files_preserve_exact_move_and_state_order(self):
+        fixture_root = Path("abalone")
+        for input_path in sorted((fixture_root / "state_space_inputs").glob("Test*.input")):
+            board, player = load_position_list_state(input_path.read_text(encoding="utf-8"))
+            expected_states = (
+                (fixture_root / "state_space_outputs" / f"{input_path.stem}.board")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+            expected_moves = (
+                (fixture_root / "state_space_outputs" / f"{input_path.stem}.move")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+
+            actual_moves = generate_move_notation_strings(board, player)
+            actual_states = [dump_position_list_state(child) for child in generate_next_states(board, player)]
+
+            self.assertEqual(actual_moves, expected_moves, msg=input_path.name)
+            self.assertEqual(actual_states, expected_states, msg=input_path.name)
 
     def test_neighbor_table_matches_legacy_neighbor_and_is_valid_helpers(self):
         for pos in ORDERED_VALID_POSITIONS:

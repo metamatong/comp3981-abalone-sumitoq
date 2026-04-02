@@ -244,7 +244,7 @@ The summary prints:
 
 - wins, losses, and draws
 - captures
-- timeout fallback count
+- partial search count (`timeout_partial` / fallback outcomes)
 - average move time
 - average completed depth
 

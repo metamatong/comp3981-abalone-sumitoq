@@ -111,43 +111,6 @@ def _cancel_future(future) -> None:
         cancel()
 
 
-def _print_gauntlet_start(
-    agent_id: str,
-    game_count: int,
-    worker_count: int,
-    prefix: str = "duel",
-    stream=None,
-) -> None:
-    del prefix
-    progress = _GauntletProgressDisplay(
-        agent_id=agent_id,
-        game_count=game_count,
-        worker_count=worker_count,
-        stream=stream,
-    )
-    progress.start()
-    progress.finish()
-
-
-def _print_gauntlet_progress(
-    completed: int,
-    total: int,
-    game: dict,
-    started_at: Optional[float] = None,
-    prefix: str = "duel",
-    stream=None,
-) -> None:
-    progress = _GauntletProgressDisplay(
-        agent_id=game.get("black_ai_id") or "gauntlet",
-        game_count=total,
-        worker_count=1,
-        stream=stream,
-        prefix=prefix,
-    )
-    progress.started_at = started_at if started_at is not None else time.perf_counter()
-    progress.update(completed, game)
-
-
 def _format_weights(agent) -> str:
     weights = getattr(agent.evaluator, "weights", None)
     if not weights:

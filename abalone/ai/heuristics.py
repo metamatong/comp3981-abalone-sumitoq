@@ -41,6 +41,109 @@ def _opponent(player: int) -> int:
     return WHITE if player == BLACK else BLACK
 
 
+def _center_distance_sum(marbles: List[Position]) -> int:
+    """Return total squared distance from center using the board's hex geometry."""
+    total = 0
+    for r, c in marbles:
+        dr, dc = r - CENTER[0], c - CENTER[1]
+        if (dr >= 0 and dc >= 0) or (dr <= 0 and dc <= 0):
+            dist = max(abs(dr), abs(dc))
+        else:
+            dist = abs(dr) + abs(dc)
+        total += dist ** 2
+    return total
+
+
+def _structure_profile(marbles: Set[Position]) -> Tuple[int, int, int]:
+    """Return adjacency score, largest cluster size, and stability count from one scan."""
+    visited: Set[Position] = set()
+    adjacency = 0
+    largest_cluster_size = 0
+    stable_count = 0
+
+    for marble in marbles:
+        if marble in visited:
+            continue
+
+        queue = deque([marble])
+        visited.add(marble)
+        component_size = 0
+
+        while queue:
+            row, col = queue.popleft()
+            component_size += 1
+            support = 0
+
+            for dr, dc in DIRECTIONS:
+                next_pos = (row + dr, col + dc)
+                if next_pos not in marbles:
+                    continue
+                adjacency += 1
+                support += 1
+                if next_pos not in visited:
+                    visited.add(next_pos)
+                    queue.append(next_pos)
+
+            if support >= 2:
+                stable_count += 1
+
+        if component_size > largest_cluster_size:
+            largest_cluster_size = component_size
+
+    return adjacency, largest_cluster_size, stable_count
+
+
+def _extract_feature_context(board: Board, player: int) -> Dict[str, object]:
+    """Collect reusable marble lists, sets, and derived scans for one evaluation."""
+    opp = _opponent(player)
+    player_marbles_list = board.get_marbles(player)
+    opp_marbles_list = board.get_marbles(opp)
+    player_marbles_set = set(player_marbles_list)
+    opp_marbles_set = set(opp_marbles_list)
+    player_adjacency, player_cluster, player_stability = _structure_profile(player_marbles_set)
+    opp_adjacency, opp_cluster, opp_stability = _structure_profile(opp_marbles_set)
+    player_risk, player_pressure = _edge_profile(player_marbles_list)
+    opp_risk, opp_pressure = _edge_profile(opp_marbles_list)
+    return {
+        "player_marbles_list": player_marbles_list,
+        "opp_marbles_list": opp_marbles_list,
+        "player_marbles_set": player_marbles_set,
+        "opp_marbles_set": opp_marbles_set,
+        "player_adjacency": player_adjacency,
+        "opp_adjacency": opp_adjacency,
+        "player_cluster": player_cluster,
+        "opp_cluster": opp_cluster,
+        "player_stability": player_stability,
+        "opp_stability": opp_stability,
+        "player_risk": player_risk,
+        "opp_risk": opp_risk,
+        "player_pressure": player_pressure,
+        "opp_pressure": opp_pressure,
+    }
+
+
+def _features_from_context(context: Dict[str, object]) -> Dict[str, float]:
+    """Build the full feature map from a reusable extraction context."""
+    player_marbles_list = context["player_marbles_list"]
+    opp_marbles_list = context["opp_marbles_list"]
+    player_marbles_set = context["player_marbles_set"]
+    opp_marbles_set = context["opp_marbles_set"]
+    return {
+        "marble": float(len(player_marbles_list) - len(opp_marbles_list)),
+        "center": float(_center_distance_sum(opp_marbles_list) - _center_distance_sum(player_marbles_list)),
+        "cohesion": float(context["player_adjacency"] - context["opp_adjacency"]),
+        "cluster": float(context["player_cluster"] - context["opp_cluster"]),
+        "edge_pressure": float(
+            (context["opp_risk"] + context["opp_pressure"])
+            - (context["player_risk"] + context["player_pressure"])
+        ),
+        "formation": formation_strength(player_marbles_set, opp_marbles_set),
+        "push": push_potential(player_marbles_set, opp_marbles_set),
+        "mobility": mobility(player_marbles_set, opp_marbles_set),
+        "stability": float(context["player_stability"] - context["opp_stability"]),
+    }
+
+
 def normalize_weights(
     weights: Dict[str, float],
     baseline: Dict[str, float] = DEFAULT_WEIGHTS,
@@ -61,22 +164,7 @@ def normalize_weights(
 
 def extract_features(board: Board, player: int) -> Dict[str, float]:
     """Return the raw heuristic feature values for `player` on the current board."""
-    opp = _opponent(player)
-    player_marbles_list = board.get_marbles(player)
-    opp_marbles_list = board.get_marbles(opp)
-    player_marbles_set = set(player_marbles_list)
-    opp_marbles_set = set(opp_marbles_list)
-    return {
-        "marble": marble_advantage(player_marbles_list, opp_marbles_list),
-        "center": center_control(player_marbles_list, opp_marbles_list),
-        "cohesion": cohesion(player_marbles_set, opp_marbles_set),
-        "cluster": largest_cluster(player_marbles_set, opp_marbles_set),
-        "edge_pressure": edge_pressure(player_marbles_list, opp_marbles_list),
-        "formation": formation_strength(player_marbles_set, opp_marbles_set),
-        "push": push_potential(player_marbles_set, opp_marbles_set),
-        "mobility": mobility(player_marbles_set, opp_marbles_set),
-        "stability": stability(player_marbles_set, opp_marbles_set),
-    }
+    return _features_from_context(_extract_feature_context(board, player))
 
 
 def evaluate_breakdown(board: Board, player: int, weights: Dict[str, float]) -> Dict[str, Dict[str, float] | float]:
@@ -135,18 +223,7 @@ def marble_advantage(player_marbles: List[Position], opp_marbles: List[Position]
 
 def center_control(player_marbles: List[Position], opp_marbles: List[Position]) -> float:
     """Prefer marbles closer to center, squared to heavily penalize edges."""
-    def dist_sum(marbles):
-        total = 0
-        for r, c in marbles:
-            dr, dc = r - CENTER[0], c - CENTER[1]
-            if (dr >= 0 and dc >= 0) or (dr <= 0 and dc <= 0):
-                dist = max(abs(dr), abs(dc))
-            else:
-                dist = abs(dr) + abs(dc)
-            total += dist ** 2
-        return total
-
-    return float(dist_sum(opp_marbles) - dist_sum(player_marbles))
+    return float(_center_distance_sum(opp_marbles) - _center_distance_sum(player_marbles))
 
 
 def cohesion(player_marbles: Set[Position], opp_marbles: Set[Position]) -> float:
@@ -301,46 +378,13 @@ def stability(player_marbles: Set[Position], opp_marbles: Set[Position]) -> floa
 
 def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) -> float:
     """Score a board using a weighted combination of shared heuristic features."""
-    weights = normalize_weights(weights)
-    opp = _opponent(player)
-
-    # Extract board marbles ONLY ONCE!
-    player_marbles_list = board.get_marbles(player)
-    opp_marbles_list = board.get_marbles(opp)
-
-    player_marbles_set = set(player_marbles_list)
-    opp_marbles_set = set(opp_marbles_list)
-
-    score = 0.0
-
-    if weights.get("marble", 0.0) != 0.0:
-        score += weights["marble"] * marble_advantage(player_marbles_list, opp_marbles_list)
-
-    if weights.get("center", 0.0) != 0.0:
-        score += weights["center"] * center_control(player_marbles_list, opp_marbles_list)
-
-    if weights.get("cohesion", 0.0) != 0.0:
-        score += weights["cohesion"] * cohesion(player_marbles_set, opp_marbles_set)
-
-    if weights.get("cluster", 0.0) != 0.0:
-        score += weights["cluster"] * largest_cluster(player_marbles_set, opp_marbles_set)
-
-    if weights.get("edge_pressure", 0.0) != 0.0:
-        score += weights["edge_pressure"] * edge_pressure(player_marbles_list, opp_marbles_list)
-
-    if weights.get("formation", 0.0) != 0.0:
-        score += weights["formation"] * formation_strength(player_marbles_set, opp_marbles_set)
-
-    if weights.get("push", 0.0) != 0.0:
-        score += weights["push"] * push_potential(player_marbles_set, opp_marbles_set)
-
-    if weights.get("mobility", 0.0) != 0.0:
-        score += weights["mobility"] * mobility(player_marbles_set, opp_marbles_set)
-
-    if weights.get("stability", 0.0) != 0.0:
-        score += weights["stability"] * stability(player_marbles_set, opp_marbles_set)
-
-    return score
+    resolved_weights = normalize_weights(weights)
+    features = _features_from_context(_extract_feature_context(board, player))
+    return sum(
+        resolved_weights[key] * features[key]
+        for key in FEATURE_ORDER
+        if resolved_weights.get(key, 0.0) != 0.0
+    )
 
 
 def build_weighted_evaluator(weights: Dict[str, float]) -> Callable[[Board, int], float]:
