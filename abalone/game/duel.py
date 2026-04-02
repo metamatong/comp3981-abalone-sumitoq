@@ -303,17 +303,10 @@ class _GauntletProgressDisplay:
         remaining = max(0, self.game_count - self.completed)
         avg_s = elapsed_s / self.completed if self.completed else 0.0
         eta_s = avg_s * remaining
-        latest = "warming up..."
-        if self.latest_game is not None:
-            winner = self.latest_game.get("winner_ai_id") or "draw"
-            latest = (
-                f"last={self.latest_game.get('black_ai_id', '?')} vs {self.latest_game.get('white_ai_id', '?')} "
-                f"-> {winner} ({self.latest_game.get('moves', '?')}m)"
-            )
         return (
             f"[{self.prefix}] {frame} {_progress_bar(self.completed, self.game_count)} "
             f"{self.completed}/{self.game_count} elapsed={_format_duration(elapsed_s)} "
-            f"eta={_format_duration(eta_s)} mode={self._mode_label()} {latest}"
+            f"eta={_format_duration(eta_s)} mode={self._mode_label()}"
         )
 
     def _build_progress_line(self, completed: int, game: dict) -> str:
