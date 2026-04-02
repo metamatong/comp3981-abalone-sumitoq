@@ -4,9 +4,8 @@ import argparse
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from ..eval.gauntlet import PARTIAL_SEARCH_SOURCES, run_game_session
 from .board import BLACK, WHITE
-from .config import GameConfig
-from .session import GameSession
 from ..players.registry import get_agent
 
 
@@ -16,7 +15,7 @@ class _AgentStats:
     losses: int = 0
     draws: int = 0
     captures: int = 0
-    timeout_fallbacks: int = 0
+    partial_searches: int = 0
     total_move_time_ms: float = 0.0
     completed_depth_sum: int = 0
     moves: int = 0
@@ -54,24 +53,15 @@ def _run_game(
     max_moves: int,
     opening_seed: int,
 ) -> dict:
-    config = GameConfig(
-        mode="ava",
-        ai_depth=depth,
+    session = run_game_session(
         black_ai_id=black_ai_id,
         white_ai_id=white_ai_id,
-        board_layout=layout,
+        depth=depth,
+        layout=layout,
+        move_time_s=move_time_s,
         max_moves=max_moves,
-        player1_time_per_turn_s=move_time_s,
-        player2_time_per_turn_s=move_time_s,
+        opening_seed=opening_seed,
     )
-    session = GameSession(config=config, opening_seed=opening_seed)
-    session.reset()
-
-    while not session.status()["game_over"]:
-        result = session.apply_agent_move()
-        if "error" in result:
-            raise RuntimeError(result["error"])
-
     status = session.status()
     return {
         "winner": status["winner"],
@@ -109,8 +99,8 @@ def _apply_game_stats(stats: Dict[str, _AgentStats], game: dict) -> None:
         agent_stats.total_move_time_ms += entry.get("duration_ms", 0)
         search = entry.get("search") or {}
         agent_stats.completed_depth_sum += int(search.get("completed_depth", 0) or 0)
-        if search.get("decision_source") == "timeout_fallback":
-            agent_stats.timeout_fallbacks += 1
+        if search.get("decision_source") in PARTIAL_SEARCH_SOURCES:
+            agent_stats.partial_searches += 1
 
 
 def _print_summary(stats: Dict[str, _AgentStats], ordered_agent_ids: List[str], rounds: int) -> None:
@@ -123,7 +113,7 @@ def _print_summary(stats: Dict[str, _AgentStats], ordered_agent_ids: List[str], 
             f"{agent_id}: "
             f"W={agent_stats.wins} L={agent_stats.losses} D={agent_stats.draws} "
             f"captures={agent_stats.captures} "
-            f"timeout_fallbacks={agent_stats.timeout_fallbacks} "
+            f"partial_searches={agent_stats.partial_searches} "
             f"avg_move_ms={avg_time:.1f} avg_completed_depth={avg_depth:.2f}"
         )
 

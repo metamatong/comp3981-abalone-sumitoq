@@ -101,7 +101,7 @@ class DuelTests(unittest.TestCase):
             duel,
             "as_completed",
             side_effect=lambda futures: list(reversed(futures)),
-        ), mock.patch.object(duel, "_print_gauntlet_start"), mock.patch.object(duel, "_print_gauntlet_progress"):
+        ):
             games = duel._run_all_opponents_games(
                 agent_id="default",
                 depth=1,
@@ -125,12 +125,7 @@ class DuelTests(unittest.TestCase):
             duel,
             "_run_all_opponents_game",
             side_effect=lambda job: {"index": job["index"]},
-        ), mock.patch.object(duel, "ProcessPoolExecutor", side_effect=PermissionError("blocked")), mock.patch.object(
-            duel,
-            "_print_gauntlet_progress",
-        ), contextlib.redirect_stderr(
-            stderr
-        ):
+        ), mock.patch.object(duel, "ProcessPoolExecutor", side_effect=PermissionError("blocked")), contextlib.redirect_stderr(stderr):
             games = duel._run_all_opponents_games(
                 agent_id="default",
                 depth=1,
@@ -159,7 +154,7 @@ class DuelTests(unittest.TestCase):
             duel,
             "as_completed",
             side_effect=lambda futures: futures,
-        ), mock.patch.object(duel, "_print_gauntlet_progress"), contextlib.redirect_stderr(stderr):
+        ), contextlib.redirect_stderr(stderr):
             games = duel._run_all_opponents_games(
                 agent_id="default",
                 depth=1,

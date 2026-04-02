@@ -109,13 +109,13 @@ def _ordered_moves(
     """
     killer1 = killer_moves[depth] if killer_moves and depth < len(killer_moves) else None
 
-    def key(move: Move) -> Tuple[int, int, int, int, str]:
+    def key(move: Move) -> Tuple[int, int, int, int, tuple]:
         return (
             0 if move == tt_move else 1,
             0 if move == killer1 else 1,
             0 if _is_push_move(board, player, move) else 1,
             -move.count,
-            move.to_notation(),
+            move.ordering_key,
         )
 
     return sorted(moves, key=key)
@@ -126,7 +126,7 @@ def _prefer_by_tie_break(tie_break: str, candidate: Move, incumbent: Optional[Mo
     if incumbent is None:
         return True
     if tie_break == "lexicographic":
-        return candidate.to_notation() < incumbent.to_notation()
+        return candidate.ordering_key < incumbent.ordering_key
     return False
 
 
