@@ -387,25 +387,21 @@ svg#board text {
 
 #end-banner.score {
   background: #274031;
-  border: 1px solid #4e8d69;
   color: #e9fff0;
 }
 
 #end-banner.timeout {
   background: #4d1f2a;
-  border: 1px solid #c95b72;
   color: #ffe9ee;
 }
 
 #end-banner.resign {
   background: #4d3f1f;
-  border: 1px solid #c9a95b;
   color: #fff8e9;
 }
 
 #end-banner.max_moves {
   background: #1f3d4d;
-  border: 1px solid #5b99c9;
   color: #e9f4ff;
 }
 
@@ -431,7 +427,6 @@ svg#board text {
   padding: 40px 52px;
   border-radius: 14px;
   text-align: center;
-  border: 3px solid #5da4d1;
   box-shadow: 0 22px 52px rgba(0, 0, 0, .55);
 }
 

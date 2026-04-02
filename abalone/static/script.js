@@ -536,6 +536,23 @@ function getTimeUsedLabel(player) {
     return formatClock(state?.time_used_ms?.[key] ?? 0);
 }
 
+function formatPreciseDuration(ms) {
+    if (ms == null || ms <= 0) return '0.000s';
+    const totalMs = Math.round(ms);
+    const mins = Math.floor(totalMs / 60000);
+    const secs = Math.floor((totalMs % 60000) / 1000);
+    const millis = totalMs % 1000;
+    if (mins > 0) {
+        return `${mins}:${String(secs).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+    }
+    return `${secs}.${String(millis).padStart(3, '0')}s`;
+}
+
+function getPreciseTimeUsedLabel(player) {
+    const key = String(player);
+    return formatPreciseDuration(state?.time_used_ms?.[key] ?? 0);
+}
+
 function renderGameTimer() {
     const el = document.getElementById('game-timer');
     if (!el) return;
@@ -648,8 +665,10 @@ function renderEndBanner() {
         return;
     }
     const msg = gameOverText();
+    const blackTimeUsed = getPreciseTimeUsedLabel(BLACK);
+    const whiteTimeUsed = getPreciseTimeUsedLabel(WHITE);
     el.className = `show ${msg.cls}`;
-    el.textContent = msg.banner;
+    el.textContent = `${msg.banner} Time used: Black ${blackTimeUsed}, White ${whiteTimeUsed}`;
 }
 
 function getLastMovedSet() {
@@ -866,7 +885,7 @@ function renderHistory() {
 }
 
 /* ── Game over ─────────────────────────────────────────── */
-function showGameOver() {
+function showGameOverLegacy() {
     const msg = gameOverText();
     document.getElementById('go-title').textContent = msg.title;
     document.getElementById('go-reason').textContent = msg.reason;
@@ -877,6 +896,18 @@ function showGameOver() {
 }
 
 /* ── Init ──────────────────────────────────────────────── */
+function showGameOver() {
+    const msg = gameOverText();
+    const blackTimeUsed = getPreciseTimeUsedLabel(BLACK);
+    const whiteTimeUsed = getPreciseTimeUsedLabel(WHITE);
+    document.getElementById('go-title').textContent = msg.title;
+    document.getElementById('go-reason').textContent = msg.reason;
+    document.getElementById('go-sub').textContent =
+        `Score: ${state.score['1']} - ${state.score['2']} | ` +
+        `Time used: Black ${blackTimeUsed}, White ${whiteTimeUsed}`;
+    document.getElementById('game-over').classList.add('show');
+}
+
 fetchState();
 openGameConfigModal();
 for (const el of document.querySelectorAll(
