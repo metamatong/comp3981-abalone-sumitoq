@@ -19,8 +19,8 @@ Board layout:
 """
 
 import random as _random
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
-from dataclasses import dataclass
 
 Position = Tuple[int, int]
 Direction = Tuple[int, int]
@@ -42,6 +42,7 @@ DIRECTIONS: List[Direction] = [
     (1, 1),    # NE (up-right)
     (-1, -1),  # SW (down-left)
 ]
+DIRECTION_SET = frozenset(DIRECTIONS)
 
 DIRECTION_NAMES: Dict[Direction, str] = {
     (0, 1): 'E', (0, -1): 'W',
@@ -50,6 +51,11 @@ DIRECTION_NAMES: Dict[Direction, str] = {
 }
 
 NAME_TO_DIR: Dict[str, Direction] = {v: k for k, v in DIRECTION_NAMES.items()}
+DIRECTION_INDEX: Dict[Direction, int] = {direction: index for index, direction in enumerate(DIRECTIONS)}
+OPPOSITE_DIRECTION: Dict[Direction, Direction] = {
+    direction: (-direction[0], -direction[1])
+    for direction in DIRECTIONS
+}
 
 # 3 axes (pairs of opposite directions)
 AXES = [
@@ -73,6 +79,27 @@ def _build_valid_positions() -> Set[Position]:
 
 
 VALID_POSITIONS: Set[Position] = _build_valid_positions()
+ORDERED_VALID_POSITIONS: Tuple[Position, ...] = tuple(sorted(VALID_POSITIONS))
+POSITION_INDEX: Dict[Position, int] = {
+    position: index
+    for index, position in enumerate(ORDERED_VALID_POSITIONS)
+}
+
+
+def _build_neighbor_table() -> Dict[Position, Tuple[Optional[Position], ...]]:
+    """Precompute valid neighbors for every board cell and direction."""
+    table: Dict[Position, Tuple[Optional[Position], ...]] = {}
+    for pos in ORDERED_VALID_POSITIONS:
+        neighbors: List[Optional[Position]] = []
+        row, col = pos
+        for dr, dc in DIRECTIONS:
+            candidate = (row + dr, col + dc)
+            neighbors.append(candidate if candidate in VALID_POSITIONS else None)
+        table[pos] = tuple(neighbors)
+    return table
+
+
+NEIGHBOR_TABLE: Dict[Position, Tuple[Optional[Position], ...]] = _build_neighbor_table()
 
 
 # --- Zobrist Hashing ---
@@ -116,52 +143,166 @@ def is_valid(pos: Position) -> bool:
 
 def opposite_dir(d: Direction) -> Direction:
     """Return the opposite direction vector for `d`."""
-    return (-d[0], -d[1])
+    return OPPOSITE_DIRECTION.get(d, (-d[0], -d[1]))
+
+
+def _canonicalize_marbles(marbles: Tuple[Position, ...]) -> Tuple[Position, ...]:
+    """Return a canonical marble tuple without paying general sort costs for <=3 items."""
+    count = len(marbles)
+    if count <= 1:
+        return tuple(marbles)
+    if count == 2:
+        first, second = marbles
+        return (first, second) if first <= second else (second, first)
+    if count == 3:
+        first, second, third = marbles
+        if first > second:
+            first, second = second, first
+        if second > third:
+            second, third = third, second
+        if first > second:
+            first, second = second, first
+        return (first, second, third)
+    return tuple(sorted(marbles))
+
+
+def _ordered_marbles_for_direction(
+    marbles: Tuple[Position, ...],
+    direction: Direction,
+) -> Tuple[Position, ...]:
+    """Order marbles from trailing to leading for a move direction."""
+    count = len(marbles)
+    if count <= 1:
+        return marbles
+
+    dr, dc = direction
+    decorated = [
+        (marble[0] * dr + marble[1] * dc, marble)
+        for marble in marbles
+    ]
+
+    if count == 2:
+        first, second = decorated
+        if first[0] <= second[0]:
+            return (first[1], second[1])
+        return (second[1], first[1])
+
+    if count == 3:
+        first, second, third = decorated
+        if first[0] > second[0]:
+            first, second = second, first
+        if second[0] > third[0]:
+            second, third = third, second
+        if first[0] > second[0]:
+            first, second = second, first
+        return (first[1], second[1], third[1])
+
+    return tuple(marble for _, marble in sorted(decorated))
 
 
 # --- Move ---
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Move:
     """Immutable move payload used by both game logic and search."""
 
     marbles: Tuple[Position, ...]   # positions of marbles being moved
     direction: Direction             # movement direction
+    _count: int = field(init=False, repr=False, compare=False)
+    _sorted_marbles: Tuple[Position, ...] = field(init=False, repr=False, compare=False)
+    _ordered_marbles: Tuple[Position, ...] = field(init=False, repr=False, compare=False)
+    _line_dir: Optional[Direction] = field(init=False, repr=False, compare=False)
+    _is_inline: bool = field(init=False, repr=False, compare=False)
+    _leading: Position = field(init=False, repr=False, compare=False)
+    _trailing: Position = field(init=False, repr=False, compare=False)
+    _notation_plain: Optional[str] = field(init=False, repr=False, compare=False, default=None)
+    _notation_pushed: Optional[str] = field(init=False, repr=False, compare=False, default=None)
+
+    def __post_init__(self):
+        """Normalize marble order and cache derived geometry once."""
+        self._set_cached_geometry(tuple(self.marbles), self.direction, canonical=False)
+
+    @classmethod
+    def from_canonical(cls, marbles: Tuple[Position, ...], direction: Direction) -> "Move":
+        """Build a move when the marble tuple is already in canonical order."""
+        move = object.__new__(cls)
+        move._set_cached_geometry(marbles, direction, canonical=True)
+        return move
+
+    def _set_cached_geometry(
+        self,
+        marbles: Tuple[Position, ...],
+        direction: Direction,
+        *,
+        canonical: bool,
+    ) -> None:
+        """Populate the canonical move state and derived caches."""
+        sorted_marbles = marbles if canonical else _canonicalize_marbles(marbles)
+        direction = (int(direction[0]), int(direction[1]))
+        count = len(sorted_marbles)
+
+        if count <= 1:
+            ordered_marbles = sorted_marbles
+            line_dir = None
+            is_inline = True
+        else:
+            line_dir = (
+                sorted_marbles[1][0] - sorted_marbles[0][0],
+                sorted_marbles[1][1] - sorted_marbles[0][1],
+            )
+            is_inline = direction == line_dir or direction == OPPOSITE_DIRECTION.get(line_dir, opposite_dir(line_dir))
+            ordered_marbles = _ordered_marbles_for_direction(sorted_marbles, direction)
+
+        leading = ordered_marbles[-1]
+        trailing = ordered_marbles[0]
+
+        object.__setattr__(self, "marbles", sorted_marbles)
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "_count", count)
+        object.__setattr__(self, "_sorted_marbles", sorted_marbles)
+        object.__setattr__(self, "_ordered_marbles", ordered_marbles)
+        object.__setattr__(self, "_line_dir", line_dir)
+        object.__setattr__(self, "_is_inline", is_inline)
+        object.__setattr__(self, "_leading", leading)
+        object.__setattr__(self, "_trailing", trailing)
+        object.__setattr__(self, "_notation_plain", None)
+        object.__setattr__(self, "_notation_pushed", None)
 
     @property
     def count(self) -> int:
         """Number of marbles in this move."""
-        return len(self.marbles)
+        return self._count
 
     @property
     def is_inline(self) -> bool:
         """Return whether movement is along the marble line (inline) vs broadside."""
-        if self.count == 1:
-            return True
-        m0, m1 = sorted(self.marbles)[:2]
-        line_dir = (m1[0] - m0[0], m1[1] - m0[1])
-        return self.direction == line_dir or self.direction == opposite_dir(line_dir)
+        return self._is_inline
 
     def leading_trailing(self):
         """Return (trailing, leading) marble based on movement direction."""
-        d = self.direction
-        s = sorted(self.marbles,
-                   key=lambda m: m[0] * d[0] + m[1] * d[1])
-        return s[0], s[-1]  # trailing, leading
+        return self._trailing, self._leading
 
     def to_notation(self, pushed=False) -> str:
         """Return CLI/web notation for the move, optionally marking push candidates."""
+        cached = self._notation_pushed if pushed else self._notation_plain
+        if cached is not None:
+            return cached
+
         if self.is_inline:
-            trailing, leading = self.leading_trailing()
-            goal = neighbor(leading, self.direction)
+            goal = neighbor(self._leading, self.direction)
             push_str = "*" if pushed else ""
-            return f"{self.count}:{pos_to_str(trailing)}{pos_to_str(goal)}{push_str}"
+            notation = f"{self.count}:{pos_to_str(self._trailing)}{pos_to_str(goal)}{push_str}"
         else:
-            sorted_m = sorted(self.marbles)
-            start = pos_to_str(sorted_m[0])
-            end = pos_to_str(sorted_m[-1])
+            start = pos_to_str(self._sorted_marbles[0])
+            end = pos_to_str(self._sorted_marbles[-1])
             dir_name = DIRECTION_NAMES[self.direction]
-            return f"{self.count}:{start}-{end}>{dir_name}"
+            notation = f"{self.count}:{start}-{end}>{dir_name}"
+
+        if pushed:
+            object.__setattr__(self, "_notation_pushed", notation)
+        else:
+            object.__setattr__(self, "_notation_plain", notation)
+        return notation
 
     def __repr__(self):
         """Represent moves using compact Abalone notation for debugging output."""
@@ -249,7 +390,7 @@ class Board:
 
     def clear(self):
         """Remove all marbles and reset scores."""
-        for pos in VALID_POSITIONS:
+        for pos in ORDERED_VALID_POSITIONS:
             self.cells[pos] = EMPTY
         self.score = {BLACK: 0, WHITE: 0}
         self.zhash = 0
@@ -302,7 +443,8 @@ class Board:
 
     def get_marbles(self, player: int) -> List[Position]:
         """Return sorted coordinates for all marbles owned by `player`."""
-        return sorted(pos for pos, v in self.cells.items() if v == player)
+        cells = self.cells
+        return [pos for pos in ORDERED_VALID_POSITIONS if cells[pos] == player]
 
     def marble_count(self, player: int) -> int:
         """Return number of marbles currently on board for `player`."""
@@ -312,76 +454,89 @@ class Board:
 
     def is_legal_move(self, move: Move, player: int) -> bool:
         """Validate move ownership, marble formation, and direction-specific constraints."""
-        opponent = WHITE if player == BLACK else BLACK
-
-        # All marbles must belong to the player
-        for m in move.marbles:
-            if self.cells.get(m) != player:
-                return False
-
-        # Marbles must form a contiguous line
+        if not self._owns_marbles(move.marbles, player):
+            return False
         if not self._marbles_in_line(move.marbles):
             return False
+        return self._is_directionally_legal(move, player)
 
-        if move.is_inline:
-            return self._check_inline(move, player, opponent)
-        else:
-            return self._check_broadside(move)
+    def is_generated_move_legal(self, move: Move, player: int) -> bool:
+        """Validate a generated move when ownership and formation are already guaranteed."""
+        return self._is_directionally_legal(move, player)
+
+    def _owns_marbles(self, marbles: Tuple[Position, ...], player: int) -> bool:
+        """Return whether all selected coordinates belong to the given player."""
+        cells = self.cells
+        for marble in marbles:
+            if cells.get(marble) != player:
+                return False
+        return True
 
     def _marbles_in_line(self, marbles: Tuple[Position, ...]) -> bool:
         """Return whether selected marbles form a contiguous straight line."""
         if len(marbles) <= 1:
             return True
-        s = sorted(marbles)
-        d = (s[1][0] - s[0][0], s[1][1] - s[0][1])
-        if d not in DIRECTIONS:
+        start = marbles[0]
+        d = (marbles[1][0] - start[0], marbles[1][1] - start[1])
+        if d not in DIRECTION_SET:
             return False
-        for i in range(2, len(s)):
-            expected = (s[0][0] + i * d[0], s[0][1] + i * d[1])
-            if s[i] != expected:
+        for index in range(2, len(marbles)):
+            expected = (start[0] + index * d[0], start[1] + index * d[1])
+            if marbles[index] != expected:
                 return False
         return True
 
+    def _is_directionally_legal(self, move: Move, player: int) -> bool:
+        """Validate the occupancy and push rules once shape has been established."""
+        opponent = WHITE if player == BLACK else BLACK
+        if move.is_inline:
+            return self._check_inline(move, player, opponent)
+        return self._check_broadside(move)
+
     def _check_inline(self, move: Move, player: int, opponent: int) -> bool:
         """Validate an inline move, including sumito push rules."""
+        cells = self.cells
         d = move.direction
-        _, leading = move.leading_trailing()
-        ahead = neighbor(leading, d)
+        direction_index = DIRECTION_INDEX[d]
+        ahead = NEIGHBOR_TABLE[move._leading][direction_index]
 
-        if not is_valid(ahead):
+        if ahead is None:
             return False  # can't move own marble off board
 
-        if self.cells[ahead] == EMPTY:
+        ahead_value = cells[ahead]
+        if ahead_value == EMPTY:
             return True
 
-        if self.cells[ahead] == player:
+        if ahead_value == player:
             return False  # can't push own marble
 
         # Count contiguous opponent marbles ahead
         pushed_count = 0
         pos = ahead
-        while is_valid(pos) and self.cells[pos] == opponent:
+        while pos is not None and cells[pos] == opponent:
             pushed_count += 1
-            pos = neighbor(pos, d)
+            pos = NEIGHBOR_TABLE[pos][direction_index]
 
         # Must outnumber
         if pushed_count >= move.count:
             return False
 
         # Space after pushed marbles must be empty or off-board
-        if is_valid(pos) and self.cells[pos] != EMPTY:
+        if pos is not None and cells[pos] != EMPTY:
             return False
 
         return True
 
     def _check_broadside(self, move: Move) -> bool:
         """Validate broadside movement where every destination must be empty and valid."""
-        d = move.direction
+        cells = self.cells
+        neighbors = NEIGHBOR_TABLE
+        direction_index = DIRECTION_INDEX[move.direction]
         for m in move.marbles:
-            dest = neighbor(m, d)
-            if not is_valid(dest):
+            dest = neighbors[m][direction_index]
+            if dest is None:
                 return False
-            if self.cells[dest] != EMPTY:
+            if cells[dest] != EMPTY:
                 return False
         return True
 
@@ -417,57 +572,53 @@ class Board:
         old_score_opponent = self.score[opponent]
         old_zhash = self.zhash
 
+        cells = self.cells
         d = move.direction
+        direction_index = DIRECTION_INDEX[d]
         if move.is_inline:
-            _, leading = move.leading_trailing()
             # Find pushed opponent marbles
             pushed = []
-            pos = neighbor(leading, d)
-            while is_valid(pos) and self.cells[pos] == opponent:
+            pos = NEIGHBOR_TABLE[move._leading][direction_index]
+            while pos is not None and cells[pos] == opponent:
                 pushed.append(pos)
-                pos = neighbor(pos, d)
+                pos = NEIGHBOR_TABLE[pos][direction_index]
 
             # Handle push-off
-            pushoff = pushed and not is_valid(pos)
+            pushoff = pushed and pos is None
             if pushoff:
                 self.score[player] += 1
 
             # Move pushed (farthest first)
             for i in range(len(pushed) - 1, -1, -1):
                 p = pushed[i]
-                old_cells.append((p, self.cells[p]))
-                self._zhash_set(p, self.cells[p])  # remove old
-                dest = neighbor(p, d)
-                if is_valid(dest):
-                    old_cells.append((dest, self.cells[dest]))
-                    self.cells[dest] = opponent
+                old_cells.append((p, cells[p]))
+                self._zhash_set(p, cells[p])  # remove old
+                dest = NEIGHBOR_TABLE[p][direction_index]
+                if dest is not None:
+                    old_cells.append((dest, cells[dest]))
+                    cells[dest] = opponent
                     self._zhash_set(dest, opponent)  # add new
-                self.cells[p] = EMPTY
+                cells[p] = EMPTY
 
             # Move own marbles (leading first)
-            sorted_by_dir = sorted(
-                move.marbles,
-                key=lambda m: m[0] * d[0] + m[1] * d[1],
-                reverse=True
-            )
-            for marble in sorted_by_dir:
-                old_cells.append((marble, self.cells[marble]))
-                self._zhash_set(marble, self.cells[marble])  # remove old
-                dest = neighbor(marble, d)
-                old_cells.append((dest, self.cells[dest]))
-                self.cells[dest] = player
+            for marble in reversed(move._ordered_marbles):
+                old_cells.append((marble, cells[marble]))
+                self._zhash_set(marble, cells[marble])  # remove old
+                dest = NEIGHBOR_TABLE[marble][direction_index]
+                old_cells.append((dest, cells[dest]))
+                cells[dest] = player
                 self._zhash_set(dest, player)  # add new
-                self.cells[marble] = EMPTY
+                cells[marble] = EMPTY
         else:
             # Broadside
             for m in move.marbles:
-                old_cells.append((m, self.cells[m]))
-                self._zhash_set(m, self.cells[m])  # remove old
-                self.cells[m] = EMPTY
+                old_cells.append((m, cells[m]))
+                self._zhash_set(m, cells[m])  # remove old
+                cells[m] = EMPTY
             for m in move.marbles:
-                dest = neighbor(m, d)
-                old_cells.append((dest, self.cells[dest]))
-                self.cells[dest] = player
+                dest = NEIGHBOR_TABLE[m][direction_index]
+                old_cells.append((dest, cells[dest]))
+                cells[dest] = player
                 self._zhash_set(dest, player)  # add new
 
         return {
@@ -492,59 +643,55 @@ class Board:
 
     def _apply_inline(self, move: Move, player: int, opponent: int, result: dict):
         """Apply an inline move, including pushes and potential push-off scoring."""
-        d = move.direction
-        _, leading = move.leading_trailing()
+        cells = self.cells
+        direction_index = DIRECTION_INDEX[move.direction]
 
         # Find pushed opponent marbles
         pushed = []
-        pos = neighbor(leading, d)
-        while is_valid(pos) and self.cells[pos] == opponent:
+        pos = NEIGHBOR_TABLE[move._leading][direction_index]
+        while pos is not None and cells[pos] == opponent:
             pushed.append(pos)
-            pos = neighbor(pos, d)
+            pos = NEIGHBOR_TABLE[pos][direction_index]
         # pos = first cell after pushed chain (empty or off-board)
 
         result['pushed'] = [pos_to_str(p) for p in pushed]
 
         # Handle push-off
-        if pushed and not is_valid(pos):
+        if pushed and pos is None:
             result['pushoff'] = True
             self.score[player] += 1
 
         # Move pushed opponent marbles (farthest first)
         for i in range(len(pushed) - 1, -1, -1):
             p = pushed[i]
-            self._zhash_set(p, self.cells[p])
-            dest = neighbor(p, d)
-            if is_valid(dest):
-                self._zhash_set(dest, self.cells[dest])
-                self.cells[dest] = opponent
+            self._zhash_set(p, cells[p])
+            dest = NEIGHBOR_TABLE[p][direction_index]
+            if dest is not None:
+                self._zhash_set(dest, cells[dest])
+                cells[dest] = opponent
                 self._zhash_set(dest, opponent)
-            self.cells[p] = EMPTY
+            cells[p] = EMPTY
 
         # Move own marbles (leading first to avoid overwriting)
-        sorted_by_dir = sorted(
-            move.marbles,
-            key=lambda m: m[0] * d[0] + m[1] * d[1],
-            reverse=True
-        )
-        for marble in sorted_by_dir:
-            self._zhash_set(marble, self.cells[marble])
-            dest = neighbor(marble, d)
-            self._zhash_set(dest, self.cells[dest])
-            self.cells[dest] = player
+        for marble in reversed(move._ordered_marbles):
+            self._zhash_set(marble, cells[marble])
+            dest = NEIGHBOR_TABLE[marble][direction_index]
+            self._zhash_set(dest, cells[dest])
+            cells[dest] = player
             self._zhash_set(dest, player)
-            self.cells[marble] = EMPTY
+            cells[marble] = EMPTY
 
     def _apply_broadside(self, move: Move, player: int):
         """Apply a broadside move after legality has already been established."""
-        d = move.direction
+        cells = self.cells
+        direction_index = DIRECTION_INDEX[move.direction]
         # Clear old, set new (safe because broadside dests are always empty)
         for m in move.marbles:
-            self._zhash_set(m, self.cells[m])
-            self.cells[m] = EMPTY
+            self._zhash_set(m, cells[m])
+            cells[m] = EMPTY
         for m in move.marbles:
-            dest = neighbor(m, d)
-            self.cells[dest] = player
+            dest = NEIGHBOR_TABLE[m][direction_index]
+            cells[dest] = player
             self._zhash_set(dest, player)
 
     # --- Display ---

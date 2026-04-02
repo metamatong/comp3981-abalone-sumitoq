@@ -163,7 +163,7 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertTrue(board.is_legal_move(result.move, BLACK))
         self.assertTrue(result.timed_out)
-        self.assertEqual(result.decision_source, "search")
+        self.assertEqual(result.decision_source, "timeout_partial")
         self.assertGreaterEqual(result.completed_depth, 1)
         self.assertLess(elapsed_ms, 600.0)
 
@@ -191,7 +191,7 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertTrue(board.is_legal_move(result.move, BLACK))
         self.assertTrue(result.timed_out)
-        self.assertEqual(result.decision_source, "timeout_fallback")
+        self.assertEqual(result.decision_source, "timeout_fallback_partial")
         self.assertEqual(result.completed_depth, 0)
 
     def test_repetition_avoidance_breaks_loop(self):

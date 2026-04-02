@@ -5,13 +5,23 @@ import unittest
 from pathlib import Path
 
 from abalone.game.main import main
-from abalone.game.board import BLACK, WHITE
+from abalone.game.board import (
+    BLACK,
+    WHITE,
+    Board,
+    DIRECTIONS,
+    NEIGHBOR_TABLE,
+    ORDERED_VALID_POSITIONS,
+    is_valid,
+    neighbor,
+)
 from abalone.file_handler import (
     compare_and_save_position_list_files,
     compare_position_list_files,
 )
 from abalone.state_space import (
     dump_position_list_state,
+    generate_legal_moves,
     generate_next_states,
     load_position_list_state,
 )
@@ -214,6 +224,32 @@ class StateSpaceFileTests(unittest.TestCase):
 
         self.assertEqual(player, BLACK)
         self.assertEqual(len(actual), 3)
+
+    def test_generated_moves_pass_full_and_fast_validators(self):
+        board, player = load_position_list_state(SAMPLE_INPUT)
+
+        for move in generate_legal_moves(board, player):
+            self.assertTrue(board.is_generated_move_legal(move, player))
+            self.assertTrue(board.is_legal_move(move, player))
+
+    def test_generated_moves_pass_full_and_fast_validators_on_standard_board(self):
+        board = Board()
+        board.setup_standard()
+
+        for player in (BLACK, WHITE):
+            for move in generate_legal_moves(board, player):
+                self.assertTrue(board.is_generated_move_legal(move, player))
+                self.assertTrue(board.is_legal_move(move, player))
+
+    def test_neighbor_table_matches_legacy_neighbor_and_is_valid_helpers(self):
+        for pos in ORDERED_VALID_POSITIONS:
+            for direction_index, direction in enumerate(DIRECTIONS):
+                expected = neighbor(pos, direction)
+                actual = NEIGHBOR_TABLE[pos][direction_index]
+                if is_valid(expected):
+                    self.assertEqual(actual, expected)
+                else:
+                    self.assertIsNone(actual)
 
 
 if __name__ == "__main__":

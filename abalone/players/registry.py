@@ -21,8 +21,8 @@ ALL_AGENTS: List[AgentDefinition] = [
     *COLE_AGENTS,
     *JONAH_AGENTS,
     *BELGIAN_AGENTS,
-    # *GERMAN_AGENTS,
-    # *STANDARD_AGENTS,
+    *GERMAN_AGENTS,
+    *STANDARD_AGENTS,
 ]
 
 AGENTS_BY_ID: Dict[str, AgentDefinition] = {agent.id: agent for agent in ALL_AGENTS}

@@ -5,7 +5,7 @@ from math import inf
 import time
 from typing import Dict, List, Optional, Tuple
 
-from ..game.board import BLACK, WHITE, Board, Move, ZOBRIST, is_valid, neighbor
+from ..game.board import BLACK, WHITE, Board, DIRECTION_INDEX, Move, NEIGHBOR_TABLE, ZOBRIST
 from ..state_space import generate_legal_moves
 from .defaults import DEFAULT_AGENT
 from .types import AgentConfig, AgentDefinition, resolve_agent_config
@@ -90,10 +90,9 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
     if not move.is_inline or move.count < 2:
         return False
 
-    _, leading = move.leading_trailing()
-    ahead = neighbor(leading, move.direction)
+    ahead = NEIGHBOR_TABLE[move._leading][DIRECTION_INDEX[move.direction]]
     opponent = _opponent(player)
-    return is_valid(ahead) and board.cells.get(ahead) == opponent
+    return ahead is not None and board.cells[ahead] == opponent
 
 
 def _ordered_moves(

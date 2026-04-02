@@ -11,13 +11,14 @@ File-level I/O helpers live in :mod:`abalone.file_handler`.
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
 
-from .board import (
+from .game.board import (
     BLACK,
     WHITE,
     Board,
     Direction,
     Move,
     Position,
+    _canonicalize_marbles,
     is_valid,
     neighbor,
     pos_to_str,
@@ -78,14 +79,14 @@ def generate_legal_moves(board: Board, player: int) -> List[Move]:
         :param marbles_list: List of (row, col) positions for the marbles in the move.
         :param direction: (dr, dc) direction tuple for the move.
         """
-        sorted_marbles = tuple(sorted(marbles_list))
-        key = (sorted_marbles, direction)
+        canonical_marbles = _canonicalize_marbles(tuple(marbles_list))
+        key = (canonical_marbles, direction)
         if key in seen:
             return
 
         seen.add(key)
-        move = Move(marbles=sorted_marbles, direction=direction)
-        if board.is_legal_move(move, player):
+        move = Move.from_canonical(canonical_marbles, direction)
+        if board.is_generated_move_legal(move, player):
             moves.append(move)
 
     # --- Pass 1: inline moves (trailing-marble enumeration) ---
