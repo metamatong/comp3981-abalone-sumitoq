@@ -1,7 +1,9 @@
+/* Applies moves and runs the native alpha-beta search with iterative deepening. */
 #include "common.h"
 
+/* Mixes a 64-bit board hash for transposition-table indexing. */
 static uint64_t
-hash_mix(uint64_t value)
+mix_hash64(uint64_t value)
 {
     value ^= value >> 33;
     value *= 0xff51afd7ed558ccdULL;
@@ -11,6 +13,7 @@ hash_mix(uint64_t value)
     return value;
 }
 
+/* Allocates an empty transposition table with power-of-two capacity. */
 static int
 tt_init(TTTable *table, size_t capacity)
 {
@@ -29,6 +32,7 @@ tt_init(TTTable *table, size_t capacity)
     return 1;
 }
 
+/* Releases all transposition-table storage. */
 static void
 tt_free(TTTable *table)
 {
@@ -38,6 +42,7 @@ tt_free(TTTable *table)
     table->size = 0;
 }
 
+/* Finds an existing transposition-table entry for the given key. */
 static TTEntry *
 tt_lookup(TTTable *table, uint64_t key)
 {
@@ -45,7 +50,7 @@ tt_lookup(TTTable *table, uint64_t key)
     if (table->capacity == 0) {
         return NULL;
     }
-    idx = (size_t) (hash_mix(key) & (table->capacity - 1));
+    idx = (size_t) (mix_hash64(key) & (table->capacity - 1));
     while (table->entries[idx].used) {
         if (table->entries[idx].key == key) {
             return &table->entries[idx];
@@ -55,6 +60,7 @@ tt_lookup(TTTable *table, uint64_t key)
     return NULL;
 }
 
+/* Rebuilds the transposition table at a larger capacity. */
 static int
 tt_rehash(TTTable *table, size_t new_capacity)
 {
@@ -66,7 +72,7 @@ tt_rehash(TTTable *table, size_t new_capacity)
     for (idx = 0; idx < table->capacity; ++idx) {
         if (table->entries[idx].used) {
             TTEntry entry = table->entries[idx];
-            size_t insert_idx = (size_t) (hash_mix(entry.key) & (replacement.capacity - 1));
+            size_t insert_idx = (size_t) (mix_hash64(entry.key) & (replacement.capacity - 1));
             while (replacement.entries[insert_idx].used) {
                 insert_idx = (insert_idx + 1) & (replacement.capacity - 1);
             }
@@ -80,6 +86,7 @@ tt_rehash(TTTable *table, size_t new_capacity)
     return 1;
 }
 
+/* Stores or replaces a transposition-table entry for the supplied key. */
 static int
 tt_store(TTTable *table, uint64_t key, int depth, double value, uint8_t flag, const NativeMove *move)
 {
@@ -89,7 +96,7 @@ tt_store(TTTable *table, uint64_t key, int depth, double value, uint8_t flag, co
             return 0;
         }
     }
-    idx = (size_t) (hash_mix(key) & (table->capacity - 1));
+    idx = (size_t) (mix_hash64(key) & (table->capacity - 1));
     while (table->entries[idx].used) {
         if (table->entries[idx].key == key) {
             table->entries[idx].depth = depth;
@@ -111,31 +118,34 @@ tt_store(TTTable *table, uint64_t key, int depth, double value, uint8_t flag, co
     return 1;
 }
 
+/* Builds the transposition key for a board plus side to move. */
 static uint64_t
 tt_key_for_board(const BoardState *board, int to_move)
 {
     return board->zhash ^ g_side_zobrist[to_move];
 }
 
+/* Checks whether the active search deadline has been reached. */
 static int
-deadline_exceeded(const SearchContext *ctx)
+deadline_reached(const SearchContext *ctx)
 {
     return ctx->deadline_at >= 0.0 && monotonic_seconds() >= ctx->deadline_at;
 }
 
+/* Applies an inline move and resolves any pushed opposing marbles. */
 static void
 apply_move_inline(BoardState *board, const NativeMove *move, int player, int opponent)
 {
     uint8_t pushed[3];
     int pushed_count = 0;
     int idx;
-    uint8_t pos = g_neighbors[move->leading][move->dir_idx];
-    while (pos != INVALID_INDEX && board->cells[pos] == (uint8_t) opponent) {
-        pushed[pushed_count++] = pos;
-        pos = g_neighbors[pos][move->dir_idx];
+    uint8_t scan_pos = g_neighbors[move->leading][move->dir_idx];
+    while (scan_pos != INVALID_INDEX && board->cells[scan_pos] == (uint8_t) opponent) {
+        pushed[pushed_count++] = scan_pos;
+        scan_pos = g_neighbors[scan_pos][move->dir_idx];
     }
 
-    if (pushed_count > 0 && pos == INVALID_INDEX) {
+    if (pushed_count > 0 && scan_pos == INVALID_INDEX) {
         board->scores[player] += 1;
     }
 
@@ -156,6 +166,7 @@ apply_move_inline(BoardState *board, const NativeMove *move, int player, int opp
     }
 }
 
+/* Applies a broadside move by clearing then refilling the shifted cells. */
 static void
 apply_move_broadside(BoardState *board, const NativeMove *move, int player)
 {
@@ -169,6 +180,7 @@ apply_move_broadside(BoardState *board, const NativeMove *move, int player)
     }
 }
 
+/* Applies either inline or broadside movement to the native board state. */
 void
 apply_move_native(BoardState *board, const NativeMove *move, int player)
 {
@@ -180,6 +192,7 @@ apply_move_native(BoardState *board, const NativeMove *move, int player)
     }
 }
 
+/* Recursively searches the game tree with alpha-beta pruning and TT support. */
 static int
 minimax_native(
     const BoardState *board,
@@ -194,20 +207,20 @@ minimax_native(
     NativeMove *out_move
 )
 {
-    double alpha_orig = alpha;
-    double beta_orig = beta;
+    double initial_alpha = alpha;
+    double initial_beta = beta;
     uint64_t key;
     TTEntry *entry;
     NativeMove tt_move;
     NativeMove best_move;
     NativeMove legal_moves[MAX_MOVES];
     int legal_count;
-    int idx;
+    int move_index;
     int maximizing;
     int opponent;
     double best_value;
 
-    if (deadline_exceeded(ctx)) {
+    if (deadline_reached(ctx)) {
         return 1;
     }
     *nodes += 1;
@@ -265,47 +278,62 @@ minimax_native(
     move_clear(&best_move);
     best_value = maximizing ? -INFINITY : INFINITY;
 
-    for (idx = 0; idx < legal_count; ++idx) {
+    for (move_index = 0; move_index < legal_count; ++move_index) {
         BoardState child = *board;
         double child_value;
-        NativeMove ignored;
+        NativeMove child_best_reply;
         int status;
 
-        if (deadline_exceeded(ctx)) {
+        if (deadline_reached(ctx)) {
             return 1;
         }
 
-        apply_move_native(&child, &legal_moves[idx], to_move);
-        status = minimax_native(&child, opponent, root_player, depth - 1, alpha, beta, ctx, nodes, &child_value, &ignored);
+        apply_move_native(&child, &legal_moves[move_index], to_move);
+        status = minimax_native(
+            &child,
+            opponent,
+            root_player,
+            depth - 1,
+            alpha,
+            beta,
+            ctx,
+            nodes,
+            &child_value,
+            &child_best_reply
+        );
         if (status != 0) {
             return status;
         }
 
         if (maximizing) {
-            if (child_value > best_value || (child_value == best_value && prefer_by_tie_break(ctx->tie_break_lexicographic, &legal_moves[idx], &best_move))) {
+            if (child_value > best_value ||
+                    (child_value == best_value &&
+                        prefer_by_tie_break(ctx->tie_break_lexicographic, &legal_moves[move_index], &best_move))) {
                 best_value = child_value;
-                best_move = legal_moves[idx];
+                best_move = legal_moves[move_index];
             }
             if (best_value > alpha) {
                 alpha = best_value;
             }
             if (beta <= alpha) {
                 if (depth < (int) (sizeof(ctx->killer_moves) / sizeof(ctx->killer_moves[0]))) {
-                    ctx->killer_moves[depth] = legal_moves[idx];
+                    ctx->killer_moves[depth] = legal_moves[move_index];
                 }
                 break;
             }
         } else {
-            if (child_value < best_value || (child_value == best_value && prefer_by_tie_break(ctx->tie_break_lexicographic, &legal_moves[idx], &best_move))) {
+            if (child_value < best_value ||
+                    (child_value == best_value &&
+                        prefer_by_tie_break(ctx->tie_break_lexicographic, &legal_moves[move_index], &best_move))) {
                 best_value = child_value;
-                best_move = legal_moves[idx];
+                best_move = legal_moves[move_index];
             }
             if (best_value < beta) {
                 beta = best_value;
             }
             if (beta <= alpha) {
                 if (depth < (int) (sizeof(ctx->killer_moves) / sizeof(ctx->killer_moves[0]))) {
-                    ctx->killer_moves[depth] = legal_moves[idx];
+                    ctx->killer_moves[depth] = legal_moves[move_index];
                 }
                 break;
             }
@@ -314,9 +342,9 @@ minimax_native(
 
     {
         uint8_t flag = EXACT;
-        if (best_value <= alpha_orig) {
+        if (best_value <= initial_alpha) {
             flag = UPPERBOUND;
-        } else if (best_value >= beta_orig) {
+        } else if (best_value >= initial_beta) {
             flag = LOWERBOUND;
         }
         if (!tt_store(&ctx->tt, key, depth, best_value, flag, &best_move)) {
@@ -329,6 +357,7 @@ minimax_native(
     return 0;
 }
 
+/* Runs iterative deepening search and returns the best move plus diagnostics. */
 int
 search_weighted_native(
     const BoardState *board,
@@ -356,6 +385,13 @@ search_weighted_native(
     int avoidance_applied = 0;
     RootCandidate saved_candidates[MAX_MOVES];
     int saved_candidate_count = 0;
+    int root_candidate_cap = root_candidate_limit;
+
+    if (root_candidate_cap < 0) {
+        root_candidate_cap = 0;
+    } else if (root_candidate_cap > MAX_MOVES) {
+        root_candidate_cap = MAX_MOVES;
+    }
 
     memset(&ctx, 0, sizeof(ctx));
     memcpy(ctx.weights, weights, sizeof(double) * FEATURE_COUNT);
@@ -429,7 +465,7 @@ search_weighted_native(
             NativeMove ignored;
             int status;
 
-            if (deadline_exceeded(&ctx)) {
+            if (deadline_reached(&ctx)) {
                 timed_out = 1;
                 break;
             }
@@ -451,7 +487,7 @@ search_weighted_native(
                 current_best_move = ordered_root[move_index];
             }
 
-            if (root_candidate_limit > 0 && depth_candidate_count < MAX_MOVES) {
+            if (root_candidate_cap > 0 && depth_candidate_count < root_candidate_cap) {
                 depth_candidates[depth_candidate_count].move = ordered_root[move_index];
                 depth_candidates[depth_candidate_count].score = child_value;
                 depth_candidates[depth_candidate_count].depth = idx;

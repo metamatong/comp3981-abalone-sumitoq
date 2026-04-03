@@ -1,3 +1,4 @@
+/* Initializes shared lookup tables, hashing data, and move-ordering helpers. */
 #include "common.h"
 
 #ifdef _WIN32
@@ -24,21 +25,23 @@ uint8_t g_edge_pressure[CELL_COUNT];
 uint64_t g_zobrist[CELL_COUNT][3];
 uint64_t g_side_zobrist[3];
 
+/* Advances the SplitMix64 generator used for deterministic Zobrist seeds. */
 static uint64_t
-splitmix64_next(uint64_t *state)
+next_splitmix64(uint64_t *generator_state)
 {
-    uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
+    uint64_t mixed = (*generator_state += 0x9E3779B97F4A7C15ULL);
+    mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EBULL;
+    return mixed ^ (mixed >> 31);
 }
 
+/* Builds board-coordinate tables, adjacency caches, edge metrics, and Zobrist keys. */
 void
 init_tables(void)
 {
-    int row;
-    int col;
-    int idx;
+    int board_row;
+    int board_col;
+    int cell_idx;
     uint64_t seed;
 
     if (g_tables_ready) {
@@ -46,66 +49,67 @@ init_tables(void)
     }
 
     memset(g_pos_index, -1, sizeof(g_pos_index));
-    idx = 0;
-    for (row = 0; row < 9; ++row) {
-        int start = row <= 4 ? 1 : row - 3;
-        int end = row <= 4 ? 5 + row : 9;
-        for (col = start; col <= end; ++col) {
-            g_rows[idx] = (uint8_t) row;
-            g_cols[idx] = (uint8_t) col;
-            g_pos_index[row][col] = (int8_t) idx;
-            idx += 1;
+    cell_idx = 0;
+    for (board_row = 0; board_row < 9; ++board_row) {
+        int start_col = board_row <= 4 ? 1 : board_row - 3;
+        int end_col = board_row <= 4 ? 5 + board_row : 9;
+        for (board_col = start_col; board_col <= end_col; ++board_col) {
+            g_rows[cell_idx] = (uint8_t) board_row;
+            g_cols[cell_idx] = (uint8_t) board_col;
+            g_pos_index[board_row][board_col] = (int8_t) cell_idx;
+            cell_idx += 1;
         }
     }
 
-    for (idx = 0; idx < CELL_COUNT; ++idx) {
-        int dir;
+    for (cell_idx = 0; cell_idx < CELL_COUNT; ++cell_idx) {
+        int direction_idx;
         uint64_t mask = 0;
-        uint8_t risk = 2;
-        uint8_t pressure = 0;
-        for (dir = 0; dir < DIR_COUNT; ++dir) {
-            int next_row = (int) g_rows[idx] + DIR_DR[dir];
-            int next_col = (int) g_cols[idx] + DIR_DC[dir];
+        uint8_t edge_risk = 2;
+        uint8_t edge_pressure = 0;
+        for (direction_idx = 0; direction_idx < DIR_COUNT; ++direction_idx) {
+            int next_row = (int) g_rows[cell_idx] + DIR_DR[direction_idx];
+            int next_col = (int) g_cols[cell_idx] + DIR_DC[direction_idx];
             uint8_t neighbor = INVALID_INDEX;
             if (next_row >= 0 && next_row < 9 && next_col >= 0 && next_col < 10) {
-                int8_t mapped = g_pos_index[next_row][next_col];
-                if (mapped >= 0) {
-                    neighbor = (uint8_t) mapped;
-                    mask |= (1ULL << neighbor);
+                int8_t mapped_index = g_pos_index[next_row][next_col];
+                if (mapped_index >= 0) {
+                    neighbor = (uint8_t) mapped_index;
+                    mask |= bit_for(neighbor);
                 }
             }
-            g_neighbors[idx][dir] = neighbor;
+            g_neighbors[cell_idx][direction_idx] = neighbor;
         }
-        g_adj_masks[idx] = mask;
+        g_adj_masks[cell_idx] = mask;
 
-        for (col = 0; col < DIR_COUNT; ++col) {
-            uint8_t pos1 = g_neighbors[idx][col];
-            if (pos1 == INVALID_INDEX) {
-                risk = 0;
+        for (direction_idx = 0; direction_idx < DIR_COUNT; ++direction_idx) {
+            uint8_t neighbor = g_neighbors[cell_idx][direction_idx];
+            if (neighbor == INVALID_INDEX) {
+                edge_risk = 0;
                 break;
             }
-            if (g_neighbors[pos1][col] == INVALID_INDEX && risk > 1) {
-                risk = 1;
+            if (g_neighbors[neighbor][direction_idx] == INVALID_INDEX && edge_risk > 1) {
+                edge_risk = 1;
             }
         }
-        if (risk == 0 || risk == 1) {
-            pressure = 1;
+        if (edge_risk == 0 || edge_risk == 1) {
+            edge_pressure = 1;
         }
-        g_edge_risk[idx] = risk == 0 ? 2 : (risk == 1 ? 1 : 0);
-        g_edge_pressure[idx] = pressure;
+        g_edge_risk[cell_idx] = edge_risk == 0 ? 2 : (edge_risk == 1 ? 1 : 0);
+        g_edge_pressure[cell_idx] = edge_pressure;
     }
 
     seed = 0xABA10EULL;
-    for (idx = 0; idx < CELL_COUNT; ++idx) {
-        g_zobrist[idx][BLACK] = splitmix64_next(&seed);
-        g_zobrist[idx][WHITE] = splitmix64_next(&seed);
+    for (cell_idx = 0; cell_idx < CELL_COUNT; ++cell_idx) {
+        g_zobrist[cell_idx][BLACK] = next_splitmix64(&seed);
+        g_zobrist[cell_idx][WHITE] = next_splitmix64(&seed);
     }
-    g_side_zobrist[BLACK] = splitmix64_next(&seed);
-    g_side_zobrist[WHITE] = splitmix64_next(&seed);
+    g_side_zobrist[BLACK] = next_splitmix64(&seed);
+    g_side_zobrist[WHITE] = next_splitmix64(&seed);
 
     g_tables_ready = 1;
 }
 
+/* Returns a monotonic wall-clock timestamp in seconds for time-budget checks. */
 double
 monotonic_seconds(void)
 {
@@ -124,45 +128,50 @@ monotonic_seconds(void)
 #endif
 }
 
+/* Maps a row/column delta to the native direction index, or -1 when invalid. */
 int
 dir_index_from_delta(int dr, int dc)
 {
-    int dir;
-    for (dir = 0; dir < DIR_COUNT; ++dir) {
-        if (DIR_DR[dir] == dr && DIR_DC[dir] == dc) {
-            return dir;
+    int direction_idx;
+    for (direction_idx = 0; direction_idx < DIR_COUNT; ++direction_idx) {
+        if (DIR_DR[direction_idx] == dr && DIR_DC[direction_idx] == dc) {
+            return direction_idx;
         }
     }
     return -1;
 }
 
+/* Resets a move struct to its empty sentinel state. */
 void
 move_clear(NativeMove *move)
 {
     memset(move, 0, sizeof(*move));
 }
 
+/* Reports whether a move struct currently holds a real move. */
 int
 move_has_value(const NativeMove *move)
 {
     return move->count > 0;
 }
 
+/* Checks whether two move payloads describe the same move. */
 int
 move_equal(const NativeMove *left, const NativeMove *right)
 {
-    int idx;
+    int marble_idx;
     if (left->count != right->count || left->dir_idx != right->dir_idx) {
         return 0;
     }
-    for (idx = 0; idx < left->count; ++idx) {
-        if (left->marbles[idx] != right->marbles[idx]) {
+    for (marble_idx = 0; marble_idx < left->count; ++marble_idx) {
+        if (left->marbles[marble_idx] != right->marbles[marble_idx]) {
             return 0;
         }
     }
     return 1;
 }
 
+/* Sorts marble indices into canonical ascending order for deduplication. */
 void
 canonicalize_indices(uint8_t *marbles, int count)
 {
@@ -193,8 +202,9 @@ canonicalize_indices(uint8_t *marbles, int count)
     }
 }
 
+/* Orders a marble line from trailing to leading along a given movement direction. */
 static void
-ordered_for_direction(const uint8_t *marbles, int count, uint8_t dir_idx, uint8_t *ordered)
+sort_marbles_for_direction(const uint8_t *marbles, int count, uint8_t dir_idx, uint8_t *ordered)
 {
     if (count <= 1) {
         ordered[0] = marbles[0];
@@ -202,9 +212,9 @@ ordered_for_direction(const uint8_t *marbles, int count, uint8_t dir_idx, uint8_
     }
 
     if (count == 2) {
-        int score0 = (int) g_rows[marbles[0]] * DIR_DR[dir_idx] + (int) g_cols[marbles[0]] * DIR_DC[dir_idx];
-        int score1 = (int) g_rows[marbles[1]] * DIR_DR[dir_idx] + (int) g_cols[marbles[1]] * DIR_DC[dir_idx];
-        if (score0 <= score1) {
+        int projection0 = (int) g_rows[marbles[0]] * DIR_DR[dir_idx] + (int) g_cols[marbles[0]] * DIR_DC[dir_idx];
+        int projection1 = (int) g_rows[marbles[1]] * DIR_DR[dir_idx] + (int) g_cols[marbles[1]] * DIR_DC[dir_idx];
+        if (projection0 <= projection1) {
             ordered[0] = marbles[0];
             ordered[1] = marbles[1];
         } else {
@@ -215,52 +225,53 @@ ordered_for_direction(const uint8_t *marbles, int count, uint8_t dir_idx, uint8_
     }
 
     {
-        uint8_t a = marbles[0];
-        uint8_t b = marbles[1];
-        uint8_t c = marbles[2];
-        int sa = (int) g_rows[a] * DIR_DR[dir_idx] + (int) g_cols[a] * DIR_DC[dir_idx];
-        int sb = (int) g_rows[b] * DIR_DR[dir_idx] + (int) g_cols[b] * DIR_DC[dir_idx];
-        int sc = (int) g_rows[c] * DIR_DR[dir_idx] + (int) g_cols[c] * DIR_DC[dir_idx];
+        uint8_t first = marbles[0];
+        uint8_t second = marbles[1];
+        uint8_t third = marbles[2];
+        int first_projection = (int) g_rows[first] * DIR_DR[dir_idx] + (int) g_cols[first] * DIR_DC[dir_idx];
+        int second_projection = (int) g_rows[second] * DIR_DR[dir_idx] + (int) g_cols[second] * DIR_DC[dir_idx];
+        int third_projection = (int) g_rows[third] * DIR_DR[dir_idx] + (int) g_cols[third] * DIR_DC[dir_idx];
 
-        if (sa > sb) {
-            int tmp_s = sa;
-            uint8_t tmp_p = a;
-            sa = sb;
-            a = b;
-            sb = tmp_s;
-            b = tmp_p;
+        if (first_projection > second_projection) {
+            int tmp_projection = first_projection;
+            uint8_t tmp_index = first;
+            first_projection = second_projection;
+            first = second;
+            second_projection = tmp_projection;
+            second = tmp_index;
         }
-        if (sb > sc) {
-            int tmp_s = sb;
-            uint8_t tmp_p = b;
-            sb = sc;
-            b = c;
-            sc = tmp_s;
-            c = tmp_p;
+        if (second_projection > third_projection) {
+            int tmp_projection = second_projection;
+            uint8_t tmp_index = second;
+            second_projection = third_projection;
+            second = third;
+            third_projection = tmp_projection;
+            third = tmp_index;
         }
-        if (sa > sb) {
-            uint8_t tmp_p = a;
-            a = b;
-            b = tmp_p;
+        if (first_projection > second_projection) {
+            uint8_t tmp_index = first;
+            first = second;
+            second = tmp_index;
         }
 
-        ordered[0] = a;
-        ordered[1] = b;
-        ordered[2] = c;
+        ordered[0] = first;
+        ordered[1] = second;
+        ordered[2] = third;
     }
 }
 
+/* Builds cached move metadata used by move ordering and move application. */
 void
 build_move(const uint8_t *canonical_marbles, int count, uint8_t dir_idx, NativeMove *move)
 {
-    int idx;
+    int marble_idx;
     int line_dir;
 
     move_clear(move);
     move->count = (uint8_t) count;
     move->dir_idx = dir_idx;
-    for (idx = 0; idx < count; ++idx) {
-        move->marbles[idx] = canonical_marbles[idx];
+    for (marble_idx = 0; marble_idx < count; ++marble_idx) {
+        move->marbles[marble_idx] = canonical_marbles[marble_idx];
     }
 
     if (count <= 1) {
@@ -272,7 +283,7 @@ build_move(const uint8_t *canonical_marbles, int count, uint8_t dir_idx, NativeM
             (int) g_cols[canonical_marbles[1]] - (int) g_cols[canonical_marbles[0]]
         );
         move->is_inline = (line_dir >= 0) && (dir_idx == (uint8_t) line_dir || dir_idx == OPPOSITE_DIR[line_dir]);
-        ordered_for_direction(canonical_marbles, count, dir_idx, move->ordered);
+        sort_marbles_for_direction(canonical_marbles, count, dir_idx, move->ordered);
     }
 
     move->leading = move->ordered[count - 1];
@@ -290,6 +301,7 @@ build_move(const uint8_t *canonical_marbles, int count, uint8_t dir_idx, NativeM
     }
 }
 
+/* Compares the stable ordering-key suffix used for deterministic tie-breaking. */
 int
 compare_ordering_key_tail(const NativeMove *left, const NativeMove *right)
 {
@@ -308,6 +320,7 @@ compare_ordering_key_tail(const NativeMove *left, const NativeMove *right)
     return 0;
 }
 
+/* Compares full move ordering keys, including group size, for root tie breaks. */
 static int
 compare_ordering_key_full(const NativeMove *left, const NativeMove *right)
 {
@@ -317,6 +330,7 @@ compare_ordering_key_full(const NativeMove *left, const NativeMove *right)
     return compare_ordering_key_tail(left, right);
 }
 
+/* Chooses the better move when scores tie and lexicographic ordering is enabled. */
 int
 prefer_by_tie_break(int tie_break_lexicographic, const NativeMove *candidate, const NativeMove *incumbent)
 {
@@ -329,28 +343,30 @@ prefer_by_tie_break(int tie_break_lexicographic, const NativeMove *candidate, co
     return compare_ordering_key_full(candidate, incumbent) < 0;
 }
 
+/* Initializes a native board from compact cell data and capture counts. */
 int
 board_init(BoardState *board, const uint8_t *cells, int black_score, int white_score)
 {
-    int idx;
+    int cell_idx;
     memset(board, 0, sizeof(*board));
     board->scores[BLACK] = black_score;
     board->scores[WHITE] = white_score;
 
-    for (idx = 0; idx < CELL_COUNT; ++idx) {
-        uint8_t cell = cells[idx];
+    for (cell_idx = 0; cell_idx < CELL_COUNT; ++cell_idx) {
+        uint8_t cell = cells[cell_idx];
         if (cell > WHITE) {
             return 0;
         }
-        board->cells[idx] = cell;
+        board->cells[cell_idx] = cell;
         if (cell == BLACK || cell == WHITE) {
-            board->bits[cell] |= bit_for((uint8_t) idx);
-            board->zhash ^= g_zobrist[idx][cell];
+            board->bits[cell] |= bit_for((uint8_t) cell_idx);
+            board->zhash ^= g_zobrist[cell_idx][cell];
         }
     }
     return 1;
 }
 
+/* Updates a single board cell while keeping bitboards and hashes in sync. */
 void
 board_set_cell(BoardState *board, uint8_t idx, uint8_t color)
 {

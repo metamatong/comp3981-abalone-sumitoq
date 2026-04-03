@@ -1,36 +1,39 @@
+/* Exposes the native move generator, evaluator, and search engine to Python. */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
 #include "common.h"
 
+/* Parses a Python weight sequence into the fixed-size native weight buffer. */
 static int
 parse_weights(PyObject *weights_obj, double *weights_out)
 {
-    PyObject *seq = PySequence_Fast(weights_obj, "weights must be a sequence");
-    Py_ssize_t size;
+    PyObject *weight_seq = PySequence_Fast(weights_obj, "weights must be a sequence");
+    Py_ssize_t weight_count;
     Py_ssize_t idx;
-    if (seq == NULL) {
+    if (weight_seq == NULL) {
         return 0;
     }
-    size = PySequence_Fast_GET_SIZE(seq);
-    if (size != FEATURE_COUNT) {
-        Py_DECREF(seq);
+    weight_count = PySequence_Fast_GET_SIZE(weight_seq);
+    if (weight_count != FEATURE_COUNT) {
+        Py_DECREF(weight_seq);
         PyErr_Format(PyExc_ValueError, "weights must contain exactly %d items", FEATURE_COUNT);
         return 0;
     }
-    for (idx = 0; idx < size; ++idx) {
-        weights_out[idx] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(seq, idx));
+    for (idx = 0; idx < weight_count; ++idx) {
+        weights_out[idx] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(weight_seq, idx));
         if (PyErr_Occurred()) {
-            Py_DECREF(seq);
+            Py_DECREF(weight_seq);
             return 0;
         }
     }
-    Py_DECREF(seq);
+    Py_DECREF(weight_seq);
     return 1;
 }
 
+/* Parses an optional Python move payload into the native move representation. */
 static int
-parse_optional_move(PyObject *move_obj, NativeMove *out_move)
+parse_optional_move_payload(PyObject *move_obj, NativeMove *out_move)
 {
     PyObject *marbles_obj;
     PyObject *direction_obj;
@@ -88,8 +91,9 @@ parse_optional_move(PyObject *move_obj, NativeMove *out_move)
     return 1;
 }
 
+/* Converts a native move into the Python tuple payload used by the adapter layer. */
 static PyObject *
-build_move_payload(const NativeMove *move)
+create_move_payload(const NativeMove *move)
 {
     PyObject *marbles_payload;
     PyObject *payload;
@@ -129,11 +133,12 @@ build_move_payload(const NativeMove *move)
     return payload;
 }
 
+/* Converts one root-candidate record into the Python diagnostics payload. */
 static PyObject *
-build_candidate_payload(const RootCandidate *candidate)
+create_candidate_payload(const RootCandidate *candidate)
 {
     PyObject *payload = PyDict_New();
-    PyObject *move_payload = build_move_payload(&candidate->move);
+    PyObject *move_payload = create_move_payload(&candidate->move);
     PyObject *score_payload;
     PyObject *depth_payload;
 
@@ -168,6 +173,7 @@ build_candidate_payload(const RootCandidate *candidate)
     return payload;
 }
 
+/* Python wrapper for native legal-move generation. */
 static PyObject *
 py_generate_legal_moves(PyObject *self, PyObject *args)
 {
@@ -208,7 +214,7 @@ py_generate_legal_moves(PyObject *self, PyObject *args)
         return NULL;
     }
     for (idx = 0; idx < move_count; ++idx) {
-        PyObject *payload = build_move_payload(&moves[idx]);
+        PyObject *payload = create_move_payload(&moves[idx]);
         if (payload == NULL) {
             Py_DECREF(result);
             return NULL;
@@ -218,6 +224,7 @@ py_generate_legal_moves(PyObject *self, PyObject *args)
     return result;
 }
 
+/* Python wrapper for native weighted board evaluation. */
 static PyObject *
 py_evaluate_weighted(PyObject *self, PyObject *args)
 {
@@ -253,6 +260,7 @@ py_evaluate_weighted(PyObject *self, PyObject *args)
     return PyFloat_FromDouble(evaluate_weighted_native(&board, player, weights));
 }
 
+/* Python wrapper for native iterative-deepening weighted search. */
 static PyObject *
 py_search_weighted(PyObject *self, PyObject *args)
 {
@@ -331,7 +339,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         time_budget_ms = (int) value;
     }
 
-    if (!parse_optional_move(avoid_move_obj, &avoid_move)) {
+    if (!parse_optional_move_payload(avoid_move_obj, &avoid_move)) {
         return NULL;
     }
 
@@ -364,7 +372,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         return NULL;
     }
 
-    move_payload = build_move_payload(&result.move);
+    move_payload = create_move_payload(&result.move);
     candidate_list = PyList_New(result.root_candidate_count);
     score_payload = PyFloat_FromDouble(result.score);
     nodes_payload = PyLong_FromUnsignedLongLong(result.nodes);
@@ -387,7 +395,7 @@ py_search_weighted(PyObject *self, PyObject *args)
     }
 
     for (idx = 0; idx < result.root_candidate_count; ++idx) {
-        PyObject *candidate_payload = build_candidate_payload(&result.root_candidates[idx]);
+        PyObject *candidate_payload = create_candidate_payload(&result.root_candidates[idx]);
         if (candidate_payload == NULL) {
             Py_DECREF(payload);
             Py_DECREF(move_payload);
@@ -440,6 +448,7 @@ static struct PyModuleDef module_def = {
     module_methods,
 };
 
+/* Initializes the Python extension module and shared native lookup tables. */
 PyMODINIT_FUNC
 PyInit__native(void)
 {

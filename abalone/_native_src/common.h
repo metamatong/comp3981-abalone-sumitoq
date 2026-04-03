@@ -1,3 +1,4 @@
+/* Shared constants, structs, and native function declarations for the Abalone extension. */
 #ifndef ABALONE_NATIVE_COMMON_H
 #define ABALONE_NATIVE_COMMON_H
 
@@ -140,12 +141,14 @@ int search_weighted_native(
     SearchResultNative *out_result
 );
 
+/* Returns the bit mask for a single board index. */
 static inline uint64_t
 bit_for(uint8_t idx)
 {
     return 1ULL << idx;
 }
 
+/* Reports whether either player has already reached the capture win condition. */
 static inline int
 board_terminal(const BoardState *board)
 {
