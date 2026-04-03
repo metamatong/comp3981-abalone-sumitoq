@@ -1,14 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
-
 
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=collect_dynamic_libs('abalone'),
+    binaries=[],
     datas=[('abalone\\static', 'abalone\\static')],
-    hiddenimports=['abalone._native'],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -24,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Abalone',
+    name='SumitoQ',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

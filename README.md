@@ -118,13 +118,50 @@ If the native extension is missing, the CLI now fails fast with a short prefligh
 
 ## Create Executable
 
-Build the native extension first, then build a standalone Windows executable with PyInstaller:
+Build the native extension first, then build the executable with the matching Python interpreter. The PyInstaller build must use the same Python version that produced `abalone._native` or the packaged app will fail its native preflight at startup.
 
-```bash
-py -3.13 -m PyInstaller --noconfirm --clean --name SumitoQ --onefile run.py --add-data "abalone\static;abalone\static"
+Recommended Windows build flow:
+
+```powershell
+# 1. Build the required native extension in-place.
+py -3.13 setup.py build_ext --inplace
+
+# 2. Package from the checked-in spec so PyInstaller includes:
+#    - abalone/static
+#    - the compiled abalone._native extension (.pyd)
+py -3.13 -m PyInstaller --noconfirm --clean SumitoQ.spec
 ```
 
-The packaged executable should include `abalone._native`. End users running the finished `.exe` do not need Python, `setuptools`, or MSVC Build Tools installed.
+This produces `dist\SumitoQ.exe`.
+
+End users running the finished `.exe` do not need Python, `setuptools`, or MSVC Build Tools installed.
+
+### Packaging Notes
+
+- `pip install PyInstaller` and `py -3.13 -m PyInstaller ...` must target the same Python installation. If PyInstaller is installed under Python 3.12 but you run `py -3.13 -m PyInstaller`, the build will fail with `No module named PyInstaller`.
+- `SumitoQ.spec` is the source of truth for packaging. It explicitly includes the native extension module `abalone._native` and the static web assets.
+- If you switch Python versions, rebuild the native extension before rebuilding the executable.
+- For easier debugging, you can temporarily build a folder-based package instead:
+
+```powershell
+py -3.13 -m PyInstaller --noconfirm --clean --onedir SumitoQ.spec
+```
+
+### Troubleshooting Executable Startup
+
+If the packaged app exits with:
+
+```text
+Native engine not built for this branch.
+```
+
+then the bundled executable is missing `abalone._native` or was built against a different Python version than the native extension.
+
+Check these first:
+
+- Re-run `py -3.13 setup.py build_ext --inplace` before packaging.
+- Rebuild from `SumitoQ.spec` instead of packaging `run.py` directly.
+- Inspect `build\SumitoQ\warn-SumitoQ.txt`. `abalone._native` should not appear there as a missing module.
 
 ## CLI Usage
 
