@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from abalone import native
 from abalone.game.main import main
 from abalone.game.board import (
     BLACK,
@@ -26,6 +27,9 @@ from abalone.state_space import (
     generate_next_states,
     load_position_list_state,
 )
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 SAMPLE_INPUT = """b
 C5b,D5b,E4b,E5b,E6b,F5b,F6b,F7b,F8b,G6b,H6b,C3w,C4w,D3w,D4w,D6w,E7w,F4w,G5w,G7w,G8w,G9w,H7w,H8w,H9w

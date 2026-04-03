@@ -2,7 +2,59 @@
 
 A fully playable [Abalone](https://en.wikipedia.org/wiki/Abalone_(board_game)) board game with a web UI, a state-space generator, local AI benchmarking, and adaptive heuristic tuning.
 
+## Native Setup
+
+This is the native-only branch. Move generation, heuristic evaluation, and minimax search now run through the compiled `abalone._native` extension, so you must build the extension before running `run.py`.
+
+Use the same Python interpreter for both install/build steps and runtime. On some Windows machines that may be `python`, `py -3`, or a full interpreter path instead of `python3`.
+
+### Windows
+
+Install Visual Studio Build Tools with the C++ workload:
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools"
+```
+
+Then make sure your Python build packages are installed:
+
+```powershell
+python3 -m ensurepip --upgrade
+python3 -m pip install --upgrade pip setuptools wheel
+```
+
+Then open a new terminal in this repo and build the extension:
+
+```powershell
+python3 setup.py build_ext --inplace
+```
+
+If the compiler is still not found, open `Developer PowerShell for VS 2022` and retry the build there.
+
+### macOS
+
+Install Apple's command-line developer tools:
+
+```bash
+xcode-select --install
+```
+
+Make sure Python build packages are installed:
+
+```bash
+python3 -m ensurepip --upgrade
+python3 -m pip install --upgrade pip setuptools wheel
+```
+
+Then build the extension:
+
+```bash
+python3 setup.py build_ext --inplace
+```
+
 ## Quick Start
+
+After the native extension is built:
 
 ```bash
 # Canonical web entrypoint
@@ -58,15 +110,21 @@ python3 -m unittest discover -s tests
 
 The web server automatically tries nearby ports if the requested one is busy.
 
-No external dependencies - runs on Python 3.8+ standard library only.
+This branch requires Python 3 plus a local C toolchain on the machine that builds the extension:
+- Windows: MSVC Build Tools
+- macOS: Xcode Command Line Tools
+
+If the native extension is missing, the CLI now fails fast with a short preflight message instead of crashing inside worker processes.
 
 ## Create Executable
 
-To build a standalone Windows executable with PyInstaller, run:
+Build the native extension first, then build a standalone Windows executable with PyInstaller:
 
 ```bash
 py -3.13 -m PyInstaller --noconfirm --clean --name SumitoQ --onefile run.py --add-data "abalone\static;abalone\static"
 ```
+
+The packaged executable should include `abalone._native`. End users running the finished `.exe` do not need Python, `setuptools`, or MSVC Build Tools installed.
 
 ## CLI Usage
 
@@ -87,6 +145,9 @@ Use these preset IDs with `--black-ai` and `--white-ai`:
 | `abdullah` | Abdullah | Member-owned preset from `abalone/players/teams/abdullah/` |
 | `cole` | Cole | Member-owned preset from `abalone/players/teams/cole/` |
 | `jonah` | Jonah | Member-owned preset from `abalone/players/teams/jonah/` |
+| `tournament-standard` | Tournament | Layout-tuned preset from `abalone/players/teams/standard/` |
+| `tournament-belgian` | Tournament | Layout-tuned preset from `abalone/players/teams/belgian_daisy/` |
+| `tournament-german` | Tournament | Layout-tuned preset from `abalone/players/teams/german_daisy/` |
 
 ### Where To Customize AI
 
@@ -127,7 +188,7 @@ python3 run.py cli --mode ava --depth 2 --black-ai kyle --white-ai cole
 ### Search Behavior
 
 - Black's first AI move is a random legal move, as required for the project.
-- After the opening move, all AI turns use the shared search engine in `abalone/ai/minimax.py`.
+- After the opening move, all AI turns use the native-backed search path exposed through `abalone/ai/minimax.py`.
 - The search uses iterative deepening and respects the remaining per-turn budget.
 - If a search runs out of time before completing a depth, it returns the best fully completed result so far.
 - If no depth finishes in time, it falls back to an immediate legal move.
@@ -517,23 +578,30 @@ Browser (HTML/JS)              Python (abalone/)
   click events    -> POST ->   game/server.py   HTTP API, session + mode config
                                game/duel.py     duel, gauntlet, and tuning CLI orchestration
                                eval/*           reusable gauntlet runners + adaptive tuning
-                               state_space.py   legal move generation
+                               state_space.py   Python wrapper over native legal move generation
                                game/cli.py      CLI game loop
                                game/main.py     CLI entry point
-                               ai/*             shared search + heuristics + types
+                               ai/*             native-backed search + heuristic wrappers + types
                                players/*        preset registry + team-owned AI configs
 ```
 
-All game logic runs in Python. The browser is a pure display layer - it renders the JSON state and sends clicks back as API calls.
+Gameplay/session orchestration stays in Python. The browser is still a pure display layer, but the heavy backend work now lives in the compiled native extension.
 
 ```text
 abalone/
   __init__.py
   board.py         # compatibility shim -> game/board.py
+  _native_src/     # native extension sources for the required abalone._native module
+    common.h       # shared native constants, structs, and function declarations
+    tables.c       # lookup tables, hashes, and core move/board helpers
+    movegen.c      # legal move generation and move ordering
+    eval.c         # weighted heuristic evaluation
+    search.c       # apply-move, TT, iterative deepening, and alpha-beta search
+    module.c       # Python extension binding layer
   ai/
     agent.py       # shared opening rule + choose_move(...) interface
-    minimax.py     # iterative deepening minimax + alpha-beta + move ordering
-    heuristics.py  # shared heuristic features, tuning metadata, and weighted evaluators
+    minimax.py     # Python adapter over the native search engine
+    heuristics.py  # shared heuristic metadata + native-backed weighted evaluators
     defaults.py    # shared default AI preset
     types.py       # AgentDefinition + AgentConfig
   eval/
@@ -559,7 +627,7 @@ abalone/
     minimax.py     # compatibility shim -> ai/minimax.py
     heuristics.py  # compatibility shim -> ai/heuristics.py
     types.py       # compatibility shim -> ai/types.py
-  state_space.py   # generate_legal_moves()
+  state_space.py   # Python wrapper over native generate_legal_moves()
   server.py        # compatibility shim -> game/server.py
   main.py          # compatibility shim -> game/main.py
   static/
@@ -574,6 +642,8 @@ tests/
   test_session_modes.py
 run.py             # Runner: web / cli / state / match / duel
 ```
+
+The extension is still built as one compiled module, `abalone._native`, but its C implementation is split across multiple source files for maintainability without changing the Python API.
 
 ## API Endpoints (Web UI)
 

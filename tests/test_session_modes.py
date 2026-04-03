@@ -1,7 +1,11 @@
 import unittest
 
+from abalone import native
 from abalone.game.config import GameConfig, MODE_HVA
 from abalone.game.session import GameSession
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class SessionModeTests(unittest.TestCase):

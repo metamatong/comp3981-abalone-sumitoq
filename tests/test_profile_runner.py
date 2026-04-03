@@ -4,6 +4,11 @@ import io
 import re
 import unittest
 
+from abalone import native
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
+
 
 class ProfileRunnerTests(unittest.TestCase):
     def test_profile_main_emits_deterministic_summary_shape(self):

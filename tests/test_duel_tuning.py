@@ -8,10 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from abalone import native
 from abalone.ai.heuristics import DEFAULT_WEIGHTS, FEATURE_ORDER, WEIGHT_TUNING_RULES
 from abalone.eval import gauntlet
 from abalone.game import duel
 from abalone.game.board import BLACK, WHITE
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class _FakeFuture:

@@ -9,4 +9,7 @@ abalone/__pycache__/server.cpython-313.pyc
 /.venv-native/
 /build/
 /dist/
+*.pyd
+*.so
+*.dylib
 *.generated.board

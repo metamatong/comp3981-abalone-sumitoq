@@ -1,10 +1,14 @@
 import unittest
 
+from abalone import native
 from abalone.ai.defaults import DEFAULT_AGENT
 from abalone.ai.heuristics import DEFAULT_WEIGHTS, build_weighted_evaluator, edge_pressure, evaluate_with_weights
 from abalone.game.board import BLACK, WHITE, Board, str_to_pos
 from abalone.game.duel import _format_weights
 from abalone.players.registry import get_agent
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 def _board_with_positions(black_positions, white_positions):

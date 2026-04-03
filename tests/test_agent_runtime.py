@@ -5,6 +5,7 @@ import time
 import unittest
 from unittest import mock
 
+from abalone import native
 from abalone.ai.agent import choose_move, choose_move_with_info
 from abalone.ai.heuristics import evaluate_board
 from abalone.ai.types import AgentConfig, AgentDefinition
@@ -14,6 +15,9 @@ from abalone.game.match import main as match_main
 from abalone.game.session import GameSession
 from abalone.players.registry import get_agent
 from abalone.state_space import generate_legal_moves
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class AgentRuntimeTests(unittest.TestCase):

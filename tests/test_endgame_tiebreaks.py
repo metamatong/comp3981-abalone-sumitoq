@@ -2,10 +2,14 @@ import contextlib
 import io
 import unittest
 
+from abalone import native
 from abalone.game.board import BLACK, WHITE
 from abalone.game.cli import Game
 from abalone.game.config import GameConfig
 from abalone.game.session import GameSession
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class EndgameTiebreakTests(unittest.TestCase):

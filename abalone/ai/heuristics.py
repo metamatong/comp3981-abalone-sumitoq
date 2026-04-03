@@ -36,6 +36,17 @@ WEIGHT_TUNING_RULES = {
     "stability": {"step": 0.16, "min_multiplier": 0.20, "max_multiplier": 3.00},
 }
 
+_NATIVE_EVALUATE_WEIGHTED = None
+
+
+def _get_native_evaluate_weighted():
+    global _NATIVE_EVALUATE_WEIGHTED
+    if _NATIVE_EVALUATE_WEIGHTED is None:
+        from ..native import evaluate_weighted as native_evaluate_weighted
+
+        _NATIVE_EVALUATE_WEIGHTED = native_evaluate_weighted
+    return _NATIVE_EVALUATE_WEIGHTED
+
 
 def _opponent(player: int) -> int:
     return WHITE if player == BLACK else BLACK
@@ -377,13 +388,12 @@ def stability(player_marbles: Set[Position], opp_marbles: Set[Position]) -> floa
 
 
 def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) -> float:
-    """Score a board using a weighted combination of shared heuristic features."""
+    """Score a board using the compiled native evaluator."""
     resolved_weights = normalize_weights(weights)
-    features = _features_from_context(_extract_feature_context(board, player))
-    return sum(
-        resolved_weights[key] * features[key]
-        for key in FEATURE_ORDER
-        if resolved_weights.get(key, 0.0) != 0.0
+    return _get_native_evaluate_weighted()(
+        board,
+        player,
+        (resolved_weights[key] for key in FEATURE_ORDER),
     )
 
 

@@ -18,9 +18,26 @@ import argparse
 import cProfile
 import pstats
 import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+def _native_build_command() -> str:
+    return "python3 setup.py build_ext --inplace"
+
+
+def _preflight_native_runtime() -> None:
+    from abalone.native import preflight_or_exit
+
+    preflight_or_exit(_native_build_command())
 
 
 def _profile_main(argv):
+    _preflight_native_runtime()
     parser = argparse.ArgumentParser(description="Profile a deterministic AI-vs-AI search run.")
     parser.add_argument("--depth", type=int, default=4, help="Shared AI depth override.")
     parser.add_argument("--max-moves", type=int, default=4, help="Maximum game moves to play.")
@@ -72,20 +89,25 @@ if __name__ == '__main__':
     mode = sys.argv[1] if len(sys.argv) > 1 else 'web'
 
     if mode == 'cli':
+        _preflight_native_runtime()
         from abalone.game.main import main
         main(sys.argv[2:])
     elif mode == 'state':
+        _preflight_native_runtime()
         from abalone.game.main import main
         main(['--state-space'] + sys.argv[2:])
     elif mode == 'match':
+        _preflight_native_runtime()
         from abalone.game.match import main
         main(sys.argv[2:])
     elif mode == 'duel':
+        _preflight_native_runtime()
         from abalone.game.duel import main
         main(sys.argv[2:])
     elif mode == 'profile':
         _profile_main(sys.argv[2:])
     else:
+        _preflight_native_runtime()
         from abalone.game.server import run
         port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
         run(port)
