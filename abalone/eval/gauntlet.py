@@ -37,6 +37,7 @@ PHASE_STEP_SCALES = {"exploration": 1.0, "refinement": 0.45, "recovery": 1.35}
 PHASE_JITTER_SCALES = {"exploration": 0.35, "refinement": 0.12, "recovery": 0.50}
 TRAINING_SEED_PAIRS = 2
 VALIDATION_SEED_PAIRS = 1
+OPPONENT_DEPTHS = (4, 5, 6)
 MAX_LOSS_CRITICAL_TURNS = 3
 MAX_WEAK_DRAW_CRITICAL_TURNS = 2
 MAX_ANALYSIS_ROOT_CANDIDATES = 3
@@ -77,16 +78,20 @@ def _sanitize_component(value: object) -> str:
 
 
 def _config_slug(config: dict) -> str:
-    return "-".join(
-        [
-            f"layout-{_sanitize_component(config['layout'])}",
-            f"depth-{config['depth'] if config['depth'] is not None else 'preset'}",
-            f"move-{config['move_time_s']}",
-            f"max-{config['max_moves']}",
-            f"seed-{config['seed']}",
-            f"iter-{config['iterations']}",
-        ]
-    )
+    components = [
+        f"layout-{_sanitize_component(config['layout'])}",
+        f"depth-{config['depth'] if config['depth'] is not None else 'preset'}",
+        f"move-{config['move_time_s']}",
+        f"max-{config['max_moves']}",
+        f"seed-{config['seed']}",
+        f"iter-{config['iterations']}",
+    ]
+    if config.get("opponent_depths"):
+        components.append(
+            "opp-"
+            + "-".join(str(int(depth)) for depth in config["opponent_depths"])
+        )
+    return "-".join(components)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -153,6 +158,7 @@ def build_tuning_jobs(
     max_moves: int,
     seed: int,
     opponents: Sequence[str],
+    opponent_depths: Optional[Sequence[int]] = None,
     training_seed_pairs: int = TRAINING_SEED_PAIRS,
     validation_seed_pairs: int = VALIDATION_SEED_PAIRS,
 ) -> Dict[str, List[dict]]:
@@ -160,27 +166,39 @@ def build_tuning_jobs(
     schedules = {"train": [], "validation": []}
     index = 0
     seed_cursor = int(seed)
+    resolved_opponent_depths = (
+        tuple(int(opponent_depth) for opponent_depth in opponent_depths)
+        if opponent_depths
+        else (depth,)
+    )
     for split, pair_count in (("train", training_seed_pairs), ("validation", validation_seed_pairs)):
         for pair_index in range(pair_count):
             for opponent_id in opponents:
-                for black_ai_id, white_ai_id in ((agent_id, opponent_id), (opponent_id, agent_id)):
-                    schedules[split].append(
-                        {
-                            "index": index,
-                            "black_ai_id": black_ai_id,
-                            "white_ai_id": white_ai_id,
-                            "depth": depth,
-                            "layout": layout,
-                            "move_time_s": move_time_s,
-                            "max_moves": max_moves,
-                            "opening_seed": seed_cursor,
-                            "agent_color": "black" if black_ai_id == agent_id else "white",
-                            "schedule_split": split,
-                            "pair_index": pair_index,
-                        }
-                    )
-                    index += 1
-                    seed_cursor += 1
+                for opponent_depth in resolved_opponent_depths:
+                    for black_ai_id, white_ai_id in ((agent_id, opponent_id), (opponent_id, agent_id)):
+                        black_depth = depth if black_ai_id == agent_id else opponent_depth
+                        white_depth = depth if white_ai_id == agent_id else opponent_depth
+                        schedules[split].append(
+                            {
+                                "index": index,
+                                "black_ai_id": black_ai_id,
+                                "white_ai_id": white_ai_id,
+                                "depth": depth,
+                                "black_depth": black_depth,
+                                "white_depth": white_depth,
+                                "target_depth": depth,
+                                "opponent_depth": opponent_depth,
+                                "layout": layout,
+                                "move_time_s": move_time_s,
+                                "max_moves": max_moves,
+                                "opening_seed": seed_cursor,
+                                "agent_color": "black" if black_ai_id == agent_id else "white",
+                                "schedule_split": split,
+                                "pair_index": pair_index,
+                            }
+                        )
+                        index += 1
+                        seed_cursor += 1
     return schedules
 
 
@@ -200,6 +218,8 @@ def run_game_session(
     move_time_s: int,
     max_moves: int,
     opening_seed: Optional[int],
+    black_depth: Optional[int] = None,
+    white_depth: Optional[int] = None,
     agent_weight_overrides: Optional[Dict[str, Dict[str, float]]] = None,
     telemetry_agent_ids: Optional[Sequence[str]] = None,
 ) -> GameSession:
@@ -218,6 +238,11 @@ def run_game_session(
         config=config,
         opening_seed=opening_seed,
         agent_weight_overrides=agent_weight_overrides,
+        agent_depth_overrides={
+            player: player_depth
+            for player, player_depth in ((BLACK, black_depth), (WHITE, white_depth))
+            if player_depth is not None
+        },
         telemetry_agent_ids=set(telemetry_agent_ids or ()),
     )
     session.reset()
@@ -261,11 +286,13 @@ def run_scheduled_game(
     session = run_game_session(
         black_ai_id=job["black_ai_id"],
         white_ai_id=job["white_ai_id"],
-        depth=job["depth"],
+        depth=job.get("depth"),
         layout=job["layout"],
         move_time_s=job["move_time_s"],
         max_moves=job["max_moves"],
         opening_seed=job["opening_seed"],
+        black_depth=job.get("black_depth"),
+        white_depth=job.get("white_depth"),
         agent_weight_overrides=agent_weight_overrides,
         telemetry_agent_ids=telemetry_agent_ids,
     )
@@ -275,6 +302,10 @@ def run_scheduled_game(
         "index": job["index"],
         "black_ai_id": job["black_ai_id"],
         "white_ai_id": job["white_ai_id"],
+        "black_depth": job.get("black_depth", job.get("depth")),
+        "white_depth": job.get("white_depth", job.get("depth")),
+        "target_depth": job.get("target_depth", job.get("depth")),
+        "opponent_depth": job.get("opponent_depth", job.get("depth")),
         "schedule_split": job.get("schedule_split", "train"),
         "winner_ai_id": winner_agent_id(status.get("winner"), job["black_ai_id"], job["white_ai_id"]),
         "winner_tiebreak": status.get("winner_tiebreak"),
@@ -1199,6 +1230,10 @@ def _build_match_log_record(iteration_index: int, game: dict, analysis: dict) ->
         "schedule_split": game.get("schedule_split", "train"),
         "black_ai_id": game["black_ai_id"],
         "white_ai_id": game["white_ai_id"],
+        "black_depth": game.get("black_depth"),
+        "white_depth": game.get("white_depth"),
+        "target_depth": game.get("target_depth"),
+        "opponent_depth": game.get("opponent_depth"),
         "opponent_id": analysis["opponent_id"],
         "target_color": analysis["target_color"],
         "winner_ai_id": game.get("winner_ai_id"),
@@ -1474,6 +1509,7 @@ def run_tuning_loop(
             raise ValueError("agent_id is required to start a fresh tuning run")
         baseline_weights = get_agent_weights(agent_id)
         opponents = [agent.id for agent in list_agents() if agent.id != agent_id]
+        opponent_depths = [int(opponent_depth) for opponent_depth in OPPONENT_DEPTHS]
         config = {
             "agent_id": agent_id,
             "depth": depth,
@@ -1484,9 +1520,15 @@ def run_tuning_loop(
             "jobs": jobs,
             "iterations": int(iterations),
             "opponents": opponents,
+            "opponent_depths": opponent_depths,
             "training_seed_pairs": TRAINING_SEED_PAIRS,
             "validation_seed_pairs": VALIDATION_SEED_PAIRS,
-            "games_per_iteration": len(opponents) * 2 * (TRAINING_SEED_PAIRS + VALIDATION_SEED_PAIRS),
+            "games_per_iteration": (
+                len(opponents)
+                * 2
+                * len(opponent_depths)
+                * (TRAINING_SEED_PAIRS + VALIDATION_SEED_PAIRS)
+            ),
         }
         run_dir = _build_run_dir(config, runs_root)
         state = _initial_state(config, baseline_weights, run_dir)
@@ -1513,6 +1555,7 @@ def run_tuning_loop(
             max_moves=state["config"]["max_moves"],
             seed=state["config"]["seed"] + ((next_iteration - 1) * int(state["config"]["games_per_iteration"])),
             opponents=state["config"]["opponents"],
+            opponent_depths=state["config"].get("opponent_depths"),
             training_seed_pairs=int(state["config"].get("training_seed_pairs", TRAINING_SEED_PAIRS)),
             validation_seed_pairs=int(state["config"].get("validation_seed_pairs", VALIDATION_SEED_PAIRS)),
         )
@@ -1533,6 +1576,10 @@ def run_tuning_loop(
                 "opponent_id": _opponent_for_game(job, agent_id),
                 "opening_seed": job["opening_seed"],
                 "agent_color": job["agent_color"],
+                "target_depth": job.get("target_depth"),
+                "opponent_depth": job.get("opponent_depth"),
+                "black_depth": job.get("black_depth"),
+                "white_depth": job.get("white_depth"),
             }
             for job in schedules["train"]
         ]
@@ -1542,6 +1589,10 @@ def run_tuning_loop(
                 "opponent_id": _opponent_for_game(job, agent_id),
                 "opening_seed": job["opening_seed"],
                 "agent_color": job["agent_color"],
+                "target_depth": job.get("target_depth"),
+                "opponent_depth": job.get("opponent_depth"),
+                "black_depth": job.get("black_depth"),
+                "white_depth": job.get("white_depth"),
             }
             for job in schedules["validation"]
         ]

@@ -23,6 +23,7 @@ class GameSession:
         initial_time_ms: int = 10 * 60 * 1000,
         opening_seed: Optional[int] = None,
         agent_weight_overrides: Optional[Dict[str, Dict[str, float]]] = None,
+        agent_depth_overrides: Optional[Dict[int, int]] = None,
         telemetry_agent_ids: Optional[Set[str]] = None,
     ):
         """Initialize session state, timers, and a standard starting board."""
@@ -32,6 +33,11 @@ class GameSession:
         self.agent_weight_overrides = {
             agent_id: {key: float(value) for key, value in weights.items()}
             for agent_id, weights in (agent_weight_overrides or {}).items()
+        }
+        self.agent_depth_overrides = {
+            int(player): int(depth)
+            for player, depth in (agent_depth_overrides or {}).items()
+            if depth is not None
         }
         self.telemetry_agent_ids = set(telemetry_agent_ids or ())
 
@@ -361,6 +367,15 @@ class GameSession:
             "total": breakdown["total"],
         }
 
+    def _resolve_ai_depth(self, player: int, agent) -> int:
+        """Resolve effective AI depth for one player, honoring evaluation overrides first."""
+        override_depth = self.agent_depth_overrides.get(player)
+        if override_depth is not None:
+            return int(override_depth)
+        if self.config.ai_depth is not None:
+            return int(self.config.ai_depth)
+        return int(agent.default_depth)
+
     def apply_agent_move(self) -> dict:
         """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
@@ -372,6 +387,7 @@ class GameSession:
 
         agent_id = self.ai_id_for_player(self.current_player)
         agent = resolve_agent_for_runtime(agent_id, self.agent_weight_overrides)
+        requested_depth = self._resolve_ai_depth(self.current_player, agent)
         time_budget_ms = self._current_turn_budget_ms()
         avoid_move = self._repeat_move_to_avoid()
         pre_move = self._build_agent_telemetry(agent, self.current_player)
@@ -381,7 +397,7 @@ class GameSession:
             self.current_player,
             agent=agent,
             config=AgentConfig(
-                depth=self.config.ai_depth,
+                depth=requested_depth,
                 time_budget_ms=time_budget_ms,
                 opening_seed=self.opening_seed,
                 is_opening_turn=(self.current_player == BLACK and not self.move_history),

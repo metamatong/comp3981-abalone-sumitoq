@@ -82,8 +82,8 @@ def normalize_depth(value: object) -> Optional[int]:
     except (TypeError, ValueError) as exc:
         raise ValueError("ai_depth must be an integer.") from exc
 
-    if depth < 1 or depth > 5:
-        raise ValueError("ai_depth must be between 1 and 5.")
+    if depth < 1 or depth > 10:
+        raise ValueError("ai_depth must be between 1 and 10.")
     return depth
 
 

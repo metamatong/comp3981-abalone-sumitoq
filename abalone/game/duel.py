@@ -492,8 +492,8 @@ def _print_all_opponents_report(agent_id: str, games: List[dict]) -> None:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if args.depth is not None and (args.depth < 1 or args.depth > 5):
-        parser.error("--depth must be between 1 and 5")
+    if args.depth is not None and (args.depth < 1 or args.depth > 10):
+        parser.error("--depth must be between 1 and 10")
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be >= 1")
     if args.iterations is not None and args.iterations < 1:

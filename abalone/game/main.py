@@ -201,8 +201,8 @@ def main(argv: Optional[List[str]] = None):
         )
         return
 
-    if args.depth is not None and (args.depth < 1 or args.depth > 5):
-        parser.error("--depth must be between 1 and 5")
+    if args.depth is not None and (args.depth < 1 or args.depth > 10):
+        parser.error("--depth must be between 1 and 10")
     try:
         get_agent(args.black_ai)
         get_agent(args.white_ai)
