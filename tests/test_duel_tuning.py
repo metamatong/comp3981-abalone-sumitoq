@@ -8,10 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from abalone import native
 from abalone.ai.heuristics import DEFAULT_WEIGHTS, FEATURE_ORDER, WEIGHT_TUNING_RULES
 from abalone.eval import gauntlet
 from abalone.game import duel
 from abalone.game.board import BLACK, WHITE
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class _FakeFuture:
@@ -276,6 +280,52 @@ class DuelTuningCliTests(unittest.TestCase):
 
 
 class AdaptiveGauntletTests(unittest.TestCase):
+    def test_build_tuning_jobs_expands_opponent_depth_sweep_in_stable_order(self):
+        schedules = gauntlet.build_tuning_jobs(
+            agent_id="target",
+            depth=2,
+            layout="standard",
+            move_time_s=5,
+            max_moves=20,
+            seed=17,
+            opponents=["opponent"],
+            opponent_depths=gauntlet.OPPONENT_DEPTHS,
+        )
+
+        self.assertEqual(len(schedules["train"]), 12)
+        self.assertEqual(len(schedules["validation"]), 6)
+
+        expected_train = [
+            (0, 4, "black", 2, 4),
+            (0, 4, "white", 4, 2),
+            (0, 5, "black", 2, 5),
+            (0, 5, "white", 5, 2),
+            (0, 6, "black", 2, 6),
+            (0, 6, "white", 6, 2),
+            (1, 4, "black", 2, 4),
+            (1, 4, "white", 4, 2),
+            (1, 5, "black", 2, 5),
+            (1, 5, "white", 5, 2),
+            (1, 6, "black", 2, 6),
+            (1, 6, "white", 6, 2),
+        ]
+        actual_train = [
+            (
+                job["pair_index"],
+                job["opponent_depth"],
+                job["agent_color"],
+                job["black_depth"],
+                job["white_depth"],
+            )
+            for job in schedules["train"]
+        ]
+        self.assertEqual(actual_train, expected_train)
+        self.assertTrue(all(job["target_depth"] == 2 for job in schedules["train"]))
+        self.assertEqual(
+            [job["opponent_depth"] for job in schedules["validation"]],
+            [4, 4, 5, 5, 6, 6],
+        )
+
     def test_parallel_run_scheduled_games_sorts_results_and_forwards_overrides(self):
         scheduled_games = [
             {"index": 0},
@@ -526,13 +576,15 @@ class AdaptiveGauntletTests(unittest.TestCase):
             self.assertEqual(iterations_one, iterations_two)
             self.assertEqual(state_one["status"], "completed")
             self.assertEqual(state_one["progress"]["completed_iterations"], 2)
+            self.assertEqual(state_one["config"]["opponent_depths"], [4, 5, 6])
+            self.assertEqual(state_one["config"]["games_per_iteration"], 18)
             self.assertEqual(state_one["final_summary"]["best_win_rate_iteration"], 2)
             self.assertEqual(state_one["final_summary"]["best_win_rate_iterations"], [2])
             self.assertGreater(state_one["final_summary"]["average_win_rate"], 0.0)
             self.assertEqual(state_one["version"], 2)
             self.assertIn("analysis_version", state_one)
-            self.assertIn("[Iteration 1/2] W=0 D=3 L=3 capture_diff=-6 partial_searches=6 accepted.", announcements_one)
-            self.assertIn("[Iteration 2/2] W=3 D=3 L=0 capture_diff=6 partial_searches=6 accepted.", announcements_one)
+            self.assertIn("[Iteration 1/2] W=0 D=9 L=9 capture_diff=-18 partial_searches=18 accepted.", announcements_one)
+            self.assertIn("[Iteration 2/2] W=9 D=9 L=0 capture_diff=18 partial_searches=18 accepted.", announcements_one)
             self.assertIn("Final summary:", announcements_one)
             self.assertTrue(any(message.startswith("Time elapsed: ") for message in announcements_one))
             self.assertIn("Iterations completed: 2", announcements_one)
@@ -549,6 +601,44 @@ class AdaptiveGauntletTests(unittest.TestCase):
         finally:
             shutil.rmtree(temp_one, ignore_errors=True)
             shutil.rmtree(temp_two, ignore_errors=True)
+
+    def test_new_tuning_run_persists_opponent_depths_and_expanded_schedule(self):
+        agents = _agents("target", "opponent")
+        temp_dir = _workspace_temp_dir("persist-opponent-depths")
+        try:
+            with mock.patch.object(
+                gauntlet,
+                "list_agents",
+                return_value=agents,
+            ), mock.patch.object(
+                gauntlet,
+                "get_agent_weights",
+                return_value=DEFAULT_WEIGHTS,
+            ):
+                checkpoint = gauntlet.run_tuning_loop(
+                    agent_id="target",
+                    iterations=1,
+                    depth=2,
+                    layout="standard",
+                    move_time_s=5,
+                    max_moves=20,
+                    seed=19,
+                    jobs=1,
+                    runs_root=Path(temp_dir),
+                    run_gauntlet_iteration=_deterministic_runner("target", DEFAULT_WEIGHTS),
+                    announce=lambda *_args, **_kwargs: None,
+                )
+
+            state = json.loads(Path(checkpoint).read_text(encoding="utf-8"))
+            self.assertEqual(state["config"]["opponent_depths"], [4, 5, 6])
+            self.assertEqual(state["config"]["games_per_iteration"], 18)
+            self.assertEqual(len(state["train_schedule"]), 12)
+            self.assertEqual(len(state["validation_schedule"]), 6)
+            self.assertEqual({item["opponent_depth"] for item in state["train_schedule"]}, {4, 5, 6})
+            self.assertEqual({item["opponent_depth"] for item in state["validation_schedule"]}, {4, 5, 6})
+            self.assertTrue(all(item["target_depth"] == 2 for item in state["train_schedule"]))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_interrupt_and_resume_preserve_checkpoint_state(self):
         agents = _agents("target", "opponent")
@@ -623,6 +713,69 @@ class AdaptiveGauntletTests(unittest.TestCase):
                 self.assertIn("final_summary", resumed_state)
                 self.assertEqual(resumed_state["final_summary"]["best_win_rate_iteration"], 2)
                 self.assertEqual(resumed_state["final_summary"]["best_win_rate_iterations"], [2])
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_resume_without_opponent_depths_keeps_legacy_single_depth_schedule(self):
+        agents = _agents("target", "opponent")
+        temp_dir = _workspace_temp_dir("legacy-depth-resume")
+        scheduled_depths = []
+        try:
+            with mock.patch.object(
+                gauntlet,
+                "list_agents",
+                return_value=agents,
+            ), mock.patch.object(
+                gauntlet,
+                "get_agent_weights",
+                return_value=DEFAULT_WEIGHTS,
+            ):
+                config = {
+                    "agent_id": "target",
+                    "depth": 2,
+                    "layout": "standard",
+                    "move_time_s": 5,
+                    "max_moves": 20,
+                    "seed": 23,
+                    "jobs": 1,
+                    "iterations": 1,
+                    "opponents": ["opponent"],
+                    "training_seed_pairs": gauntlet.TRAINING_SEED_PAIRS,
+                    "validation_seed_pairs": gauntlet.VALIDATION_SEED_PAIRS,
+                    "games_per_iteration": 6,
+                }
+                state = gauntlet._initial_state(config, DEFAULT_WEIGHTS, Path(temp_dir) / "legacy")
+                gauntlet.save_checkpoint(state)
+
+                def legacy_runner(scheduled_games, worker_count, agent_weight_overrides, telemetry_agent_ids, on_game_complete, on_warning):
+                    del worker_count, agent_weight_overrides, telemetry_agent_ids, on_warning
+                    games = []
+                    scheduled_depths.extend(job["opponent_depth"] for job in scheduled_games)
+                    for completed, job in enumerate(scheduled_games, start=1):
+                        game = _build_game(job, "target", "draw", depth=job["target_depth"])
+                        games.append(game)
+                        on_game_complete(completed, len(scheduled_games), game)
+                    return games
+
+                checkpoint = gauntlet.run_tuning_loop(
+                    agent_id=None,
+                    iterations=1,
+                    depth=2,
+                    layout="standard",
+                    move_time_s=5,
+                    max_moves=20,
+                    seed=23,
+                    jobs=1,
+                    resume_from=str(Path(state["paths"]["checkpoint"])),
+                    runs_root=Path(temp_dir),
+                    run_gauntlet_iteration=legacy_runner,
+                    announce=lambda *_args, **_kwargs: None,
+                )
+
+            resumed_state = json.loads(Path(checkpoint).read_text(encoding="utf-8"))
+            self.assertNotIn("opponent_depths", resumed_state["config"])
+            self.assertEqual(len(scheduled_depths), 6)
+            self.assertEqual(set(scheduled_depths), {2})
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

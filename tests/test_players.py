@@ -1,8 +1,12 @@
 import unittest
 
+from abalone import native
 from abalone.ai.agent import choose_move
 from abalone.ai.types import AgentConfig
 from abalone.game.board import BLACK, Board, Move
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class MinimaxPlayerTests(unittest.TestCase):

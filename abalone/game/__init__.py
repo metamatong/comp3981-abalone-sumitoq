@@ -1,13 +1,8 @@
-"""Game runtime package for Abalone."""
+"""Game runtime package for Abalone.
 
-from .config import (
-    CONTROLLER_AI,
-    CONTROLLER_HUMAN,
-    MODE_AVA,
-    MODE_HVA,
-    MODE_HVH,
-    GameConfig,
-)
+Keep package-level exports lazy so importing submodules such as
+``abalone.game.board`` does not eagerly import the rest of the runtime.
+"""
 
 __all__ = [
     "GameConfig",
@@ -19,9 +14,22 @@ __all__ = [
     "Game",
 ]
 
+_CONFIG_EXPORTS = {
+    "GameConfig",
+    "MODE_HVH",
+    "MODE_HVA",
+    "MODE_AVA",
+    "CONTROLLER_HUMAN",
+    "CONTROLLER_AI",
+}
+
 
 def __getattr__(name):
-    """Lazily import `Game` to avoid importing CLI dependencies at package import time."""
+    """Resolve package exports lazily to avoid import-time cycles."""
+    if name in _CONFIG_EXPORTS:
+        from . import config
+
+        return getattr(config, name)
     if name == "Game":
         from .cli import Game
 

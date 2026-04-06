@@ -5,8 +5,10 @@ import time
 import unittest
 from unittest import mock
 
+from abalone import native
 from abalone.ai.agent import choose_move, choose_move_with_info
 from abalone.ai.heuristics import evaluate_board
+from abalone.ai.minimax import SearchResult
 from abalone.ai.types import AgentConfig, AgentDefinition
 from abalone.game.board import BLACK, WHITE, Board
 from abalone.game.config import GameConfig, MODE_AVA, MODE_HVA
@@ -14,6 +16,9 @@ from abalone.game.match import main as match_main
 from abalone.game.session import GameSession
 from abalone.players.registry import get_agent
 from abalone.state_space import generate_legal_moves
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class AgentRuntimeTests(unittest.TestCase):
@@ -114,6 +119,48 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["agent_id"], "abdullah")
         self.assertEqual(result["search"]["depth"], get_agent("abdullah").default_depth)
+
+    def test_session_uses_per_side_depth_overrides_before_global_depth(self):
+        recorded_depths = []
+
+        def fake_choose(board, player, config=None, agent=None):
+            recorded_depths.append((player, config.depth))
+            move = generate_legal_moves(board, player)[0]
+            return SearchResult(
+                move=move,
+                score=0.0,
+                nodes=0,
+                elapsed_ms=0.0,
+                depth=config.depth,
+                completed_depth=0,
+                decision_source="test",
+                timed_out=False,
+                time_budget_ms=config.time_budget_ms,
+                agent_id=agent.id,
+                agent_label=agent.label,
+            )
+
+        session = GameSession(
+            config=GameConfig(
+                mode=MODE_AVA,
+                ai_depth=1,
+                black_ai_id="kyle",
+                white_ai_id="abdullah",
+            ),
+            opening_seed=3,
+            agent_depth_overrides={BLACK: 2, WHITE: 6},
+        )
+        session.reset()
+
+        with mock.patch("abalone.game.session.choose_move_with_info", side_effect=fake_choose):
+            black_move = session.apply_agent_move()
+            white_move = session.apply_agent_move()
+
+        self.assertTrue(black_move.get("ok"))
+        self.assertTrue(white_move.get("ok"))
+        self.assertEqual(recorded_depths, [(BLACK, 2), (WHITE, 6)])
+        self.assertEqual(black_move["search"]["depth"], 2)
+        self.assertEqual(white_move["search"]["depth"], 6)
 
     def test_hva_uses_only_ai_controlled_side_selection(self):
         session = GameSession(

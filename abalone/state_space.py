@@ -15,29 +15,26 @@ from .game.board import (
     BLACK,
     WHITE,
     Board,
-    Direction,
     Move,
     Position,
-    _canonicalize_marbles,
     is_valid,
     neighbor,
     pos_to_str,
     str_to_pos,
 )
 
-# 3 "positive" directions (one per axis, to avoid counting pairs/triples twice)
-POSITIVE_DIRS: List[Direction] = [(0, 1), (1, 0), (1, 1)]
 INITIAL_MARBLES_PER_PLAYER = 14
 
-# Direction order used by the reference implementation for move enumeration.
-REFERENCE_DIRECTIONS: List[Direction] = [
-    (1, 1),    # NE
-    (0, 1),    # E
-    (-1, 0),   # SE
-    (-1, -1),  # SW
-    (0, -1),   # W
-    (1, 0),    # NW
-]
+_NATIVE_GENERATE_LEGAL_MOVES = None
+
+
+def _get_native_generate_legal_moves():
+    global _NATIVE_GENERATE_LEGAL_MOVES
+    if _NATIVE_GENERATE_LEGAL_MOVES is None:
+        from .native import generate_legal_moves as native_generate_legal_moves
+
+        _NATIVE_GENERATE_LEGAL_MOVES = native_generate_legal_moves
+    return _NATIVE_GENERATE_LEGAL_MOVES
 
 
 @dataclass(frozen=True)
@@ -57,77 +54,8 @@ class PositionListComparison:
 
 
 def generate_legal_moves(board: Board, player: int) -> List[Move]:
-    """Generate all unique legal moves for the given player.
-
-    Moves are enumerated using trailing-marble-based iteration: each marble
-    is treated as the rearmost (trailing) marble and inline groups of 1, 2,
-    and 3 marbles are extended forward in the move direction.  The direction
-    order follows the reference implementation (NE, E, SE, SW, W, NW).
-
-    :param board: Current board state to evaluate.
-    :param player: Color constant (BLACK or WHITE) whose moves to generate.
-    :return: Deduplicated list of legal Move objects.
-    """
-    moves: List[Move] = []
-    seen: Set[Tuple[Tuple[Position, ...], Direction]] = set()
-    marbles = board.get_marbles(player)
-    marble_set = set(marbles)
-    add_move = moves.append
-    seen_add = seen.add
-    is_legal = board.is_generated_move_legal_raw
-    ref_dirs = REFERENCE_DIRECTIONS
-    next_neighbor = neighbor
-
-    def _add(marbles_tuple: Tuple[Position, ...], direction: Direction) -> None:
-        """Insert a move candidate once, then keep only legal candidates.
-
-        :param marbles_tuple: Tuple of (row, col) positions for the marbles in the move.
-        :param direction: (dr, dc) direction tuple for the move.
-        """
-        canonical_marbles = _canonicalize_marbles(marbles_tuple)
-        key = (canonical_marbles, direction)
-        if key in seen:
-            return
-
-        seen_add(key)
-        if is_legal(canonical_marbles, direction, player):
-            add_move(Move.from_canonical(canonical_marbles, direction))
-
-    # --- Pass 1: inline moves (trailing-marble enumeration) ---
-    # This determines the canonical ordering for inline moves.
-    for marble in marbles:
-        for direction in ref_dirs:
-            # 1-stone move
-            _add((marble,), direction)
-
-            # 2-stone inline: extend forward from trailing marble
-            fwd1 = next_neighbor(marble, direction)
-            if fwd1 in marble_set:
-                _add((marble, fwd1), direction)
-
-                # 3-stone inline: extend one more step forward
-                fwd2 = next_neighbor(fwd1, direction)
-                if fwd2 in marble_set:
-                    _add((marble, fwd1, fwd2), direction)
-
-    # --- Pass 2: broadside moves ---
-    # Find pairs/triples along each line axis and try all directions.
-    # The ``seen`` set ensures inline moves from pass 1 are not duplicated.
-    for marble in marbles:
-        for line_dir in POSITIVE_DIRS:
-            second = next_neighbor(marble, line_dir)
-            if second in marble_set:
-                pair = (marble, second)
-                for direction in ref_dirs:
-                    _add(pair, direction)
-
-                third = next_neighbor(second, line_dir)
-                if third in marble_set:
-                    triple = (marble, second, third)
-                    for direction in ref_dirs:
-                        _add(triple, direction)
-
-    return moves
+    """Generate legal moves through the compiled native engine."""
+    return _get_native_generate_legal_moves()(board, player)
 
 
 def generate_next_states(board: Board, player: int) -> List[Board]:

@@ -3,8 +3,12 @@ import io
 import unittest
 from unittest import mock
 
+from abalone import native
 from abalone.game import duel
 from abalone.players.registry import get_agent
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class _FakeExecutor:

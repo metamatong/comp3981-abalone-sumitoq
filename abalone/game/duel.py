@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from typing import List, Optional
 
+from .. import native
 from ..ai.heuristics import FEATURE_ORDER
 from ..eval import gauntlet as eval_gauntlet
 from ..game.board import BLACK, WHITE
@@ -50,6 +51,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Worker process count for gauntlet and tuning modes. Defaults to CPU count; use 1 for serial execution.",
     )
     return parser
+
+
+def _preflight_native_runtime() -> None:
+    native.preflight_or_exit()
 
 
 def _run_game(
@@ -487,8 +492,8 @@ def _print_all_opponents_report(agent_id: str, games: List[dict]) -> None:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if args.depth is not None and (args.depth < 1 or args.depth > 5):
-        parser.error("--depth must be between 1 and 5")
+    if args.depth is not None and (args.depth < 1 or args.depth > 10):
+        parser.error("--depth must be between 1 and 10")
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be >= 1")
     if args.iterations is not None and args.iterations < 1:
@@ -614,6 +619,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     """Run AI-vs-AI duel simulations and print reports."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _preflight_native_runtime()
     _validate_args(parser, args)
 
     if args.tune:

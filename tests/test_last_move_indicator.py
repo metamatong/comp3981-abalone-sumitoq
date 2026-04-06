@@ -1,7 +1,11 @@
 import unittest
 
+from abalone import native
 from abalone.game.board import is_valid, neighbor, pos_to_str, str_to_pos
 from abalone.game.session import GameSession
+
+if not native.is_available():
+    raise unittest.SkipTest("native extension not built")
 
 
 class LastMoveIndicatorTests(unittest.TestCase):
