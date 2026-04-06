@@ -173,6 +173,33 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(black_move["search"]["depth"], 2)
         self.assertEqual(white_move["search"]["depth"], 6)
 
+    def test_session_caps_search_depth_to_remaining_game_moves(self):
+        board = Board()
+        board.clear()
+        board.cells[(4, 5)] = BLACK
+        board.cells[(8, 9)] = WHITE
+        board.recompute_zhash()
+
+        session = GameSession(
+            config=GameConfig(
+                mode=MODE_AVA,
+                ai_depth=6,
+                max_moves=80,
+                white_ai_id="default",
+            ),
+            opening_seed=3,
+        )
+        session.board = board
+        session.current_player = WHITE
+        session.move_history = [{} for _ in range(78)]
+        session.started = True
+
+        result = session.apply_agent_move()
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result["search"]["depth"], 2)
+        self.assertEqual(result["search"]["completed_depth"], 2)
+
     def test_hva_uses_only_ai_controlled_side_selection(self):
         session = GameSession(
             config=GameConfig(
@@ -253,6 +280,50 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(result.decision_source, "timeout_fallback_partial")
         self.assertEqual(result.completed_depth, 0)
 
+    def test_direct_search_caps_depth_to_remaining_game_moves(self):
+        board = Board()
+        board.clear()
+        board.cells[(4, 5)] = BLACK
+        board.cells[(8, 9)] = WHITE
+        board.recompute_zhash()
+
+        result = choose_move_with_info(
+            board,
+            WHITE,
+            agent=get_agent("default"),
+            config=AgentConfig(depth=5, remaining_game_moves=2, is_opening_turn=False),
+        )
+
+        self.assertTrue(board.is_legal_move(result.move, WHITE))
+        self.assertEqual(result.depth, 2)
+        self.assertEqual(result.completed_depth, 2)
+
+    def test_quiescence_does_not_extend_beyond_remaining_game_moves(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=4,
+        )
+
+        with mock.patch("abalone.ai.minimax._quiescence", side_effect=AssertionError("quiescence should not run")):
+            result = choose_move_with_info(
+                board,
+                WHITE,
+                agent=quiet_agent,
+                config=AgentConfig(depth=1, is_opening_turn=False, remaining_game_moves=1),
+            )
+
+        self.assertTrue(board.is_legal_move(result.move, WHITE))
+        self.assertEqual(result.depth, 1)
+        self.assertEqual(result.completed_depth, 1)
+
     def test_quiescence_depth_from_agent_definition_can_be_overridden_to_zero(self):
         board = Board.from_compact_token(
             "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
@@ -317,6 +388,7 @@ class AgentRuntimeTests(unittest.TestCase):
             WHITE,
             WHITE,
             4,
+            None,
             -inf,
             inf,
             evaluate_board,
@@ -331,6 +403,7 @@ class AgentRuntimeTests(unittest.TestCase):
             WHITE,
             WHITE,
             4,
+            None,
             -inf,
             inf,
             evaluate_board,

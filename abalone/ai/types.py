@@ -35,6 +35,7 @@ class AgentConfig:
     root_candidate_limit: int = 0
     analysis_evaluator_id: Optional[str] = None
     board_token_before: Optional[str] = None
+    remaining_game_moves: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -51,13 +52,19 @@ class ResolvedAgentConfig:
     root_candidate_limit: int
     analysis_evaluator_id: Optional[str]
     board_token_before: Optional[str]
+    remaining_game_moves: Optional[int]
 
 
 def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] = None) -> ResolvedAgentConfig:
     """Merge runtime overrides onto an agent preset."""
     config = config or AgentConfig()
+    depth = config.depth if config.depth is not None else agent.default_depth
+    remaining_game_moves = None
+    if config.remaining_game_moves is not None:
+        remaining_game_moves = max(0, int(config.remaining_game_moves))
+        depth = min(depth, remaining_game_moves)
     return ResolvedAgentConfig(
-        depth=config.depth if config.depth is not None else agent.default_depth,
+        depth=depth,
         tie_break=config.tie_break if config.tie_break is not None else agent.tie_break,
         max_quiescence_depth=max(
             0,
@@ -74,4 +81,5 @@ def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] =
         root_candidate_limit=max(0, int(config.root_candidate_limit or 0)),
         analysis_evaluator_id=config.analysis_evaluator_id,
         board_token_before=config.board_token_before,
+        remaining_game_moves=remaining_game_moves,
     )

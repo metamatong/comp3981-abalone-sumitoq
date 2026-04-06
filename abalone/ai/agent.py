@@ -8,7 +8,7 @@ from ..game.board import BLACK
 from ..state_space import generate_legal_moves
 from .defaults import DEFAULT_AGENT
 from .minimax import SearchResult, search_best_move
-from .types import AgentConfig, AgentDefinition
+from .types import AgentConfig, AgentDefinition, resolve_agent_config
 
 
 def choose_move(
@@ -30,7 +30,7 @@ def choose_move_with_info(
 ) -> SearchResult:
     """Return full move-selection metadata, including diagnostics."""
     resolved_agent = agent or DEFAULT_AGENT
-    resolved_config = config or AgentConfig()
+    resolved_config = resolve_agent_config(resolved_agent, config)
     if player == BLACK and resolved_config.is_opening_turn:
         start = perf_counter()
         legal_moves = generate_legal_moves(board, player)
@@ -40,7 +40,7 @@ def choose_move_with_info(
                 score=resolved_agent.evaluator(board, player),
                 nodes=0,
                 elapsed_ms=(perf_counter() - start) * 1000.0,
-                depth=resolved_config.depth or resolved_agent.default_depth,
+                depth=resolved_config.depth,
                 completed_depth=0,
                 decision_source="opening_random",
                 timed_out=False,
@@ -55,7 +55,7 @@ def choose_move_with_info(
             score=0.0,
             nodes=0,
             elapsed_ms=(perf_counter() - start) * 1000.0,
-            depth=resolved_config.depth or resolved_agent.default_depth,
+            depth=resolved_config.depth,
             completed_depth=0,
             decision_source="opening_random",
             timed_out=False,
@@ -63,4 +63,4 @@ def choose_move_with_info(
             agent_id=resolved_agent.id,
             agent_label=resolved_agent.label,
         )
-    return search_best_move(board, player, agent=resolved_agent, config=resolved_config)
+    return search_best_move(board, player, agent=resolved_agent, config=config)

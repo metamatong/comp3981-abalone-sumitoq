@@ -152,13 +152,14 @@ def _quiescence(
     to_move: int,
     root_player: int,
     remaining_depth: int,
+    remaining_game_moves: Optional[int],
     alpha: float,
     beta: float,
     evaluator,
     tie_break: str,
     deadline_at: Optional[float],
     stats: Dict[str, int],
-    tt: Dict[tuple[int, int], TTEntry],
+    tt: Dict[tuple[int, int, int], TTEntry],
 ) -> tuple[float, Optional[Move]]:
     """Extend only tactical leaf moves to reduce horizon effects in noisy positions."""
     _check_deadline(deadline_at)
@@ -166,7 +167,7 @@ def _quiescence(
     alpha_orig = alpha
     beta_orig = beta
 
-    tt_key = _make_tt_key(board, to_move, TT_MODE_QUIESCENCE)
+    tt_key = _make_tt_key(board, to_move, TT_MODE_QUIESCENCE, remaining_game_moves)
     tt_entry = tt.get(tt_key)
     if tt_entry is not None and tt_entry.depth >= remaining_depth:
         if tt_entry.flag == EXACT:
@@ -181,7 +182,7 @@ def _quiescence(
     tt_move = tt_entry.move if tt_entry is not None else None
 
     stand_pat = evaluator(board, root_player)
-    if remaining_depth <= 0 or _is_terminal(board):
+    if remaining_depth <= 0 or _is_terminal(board) or (remaining_game_moves is not None and remaining_game_moves <= 0):
         tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=EXACT, move=None)
         return stand_pat, None
 
@@ -211,6 +212,7 @@ def _quiescence(
     tactical_moves = _ordered_moves(board, to_move, tactical_moves, tt_move)
     best_move = None
     opponent = _opponent(to_move)
+    next_remaining_game_moves = None if remaining_game_moves is None else remaining_game_moves - 1
 
     if maximizing:
         for move in tactical_moves:
@@ -222,6 +224,7 @@ def _quiescence(
                     opponent,
                     root_player,
                     remaining_depth - 1,
+                    next_remaining_game_moves,
                     alpha,
                     beta,
                     evaluator,
@@ -249,6 +252,7 @@ def _quiescence(
                     opponent,
                     root_player,
                     remaining_depth - 1,
+                    next_remaining_game_moves,
                     alpha,
                     beta,
                     evaluator,
@@ -319,9 +323,15 @@ def _check_deadline(deadline_at: Optional[float]) -> None:
         raise _SearchTimeout
 
 
-def _make_tt_key(board: Board, to_move: int, mode: int = TT_MODE_FULL) -> tuple[int, int]:
-    """Create a TT key from the board hash, side to move, and search mode."""
-    return board.zhash ^ ZOBRIST[('side', to_move)], mode
+def _make_tt_key(
+    board: Board,
+    to_move: int,
+    mode: int = TT_MODE_FULL,
+    remaining_game_moves: Optional[int] = None,
+) -> tuple[int, int, int]:
+    """Create a TT key from the board hash, side to move, search mode, and move budget."""
+    remaining_key = -1 if remaining_game_moves is None else int(remaining_game_moves)
+    return board.zhash ^ ZOBRIST[('side', to_move)], mode, remaining_key
 
 
 def _minimax(
@@ -329,25 +339,29 @@ def _minimax(
     to_move: int,
     root_player: int,
     depth: int,
+    remaining_game_moves: Optional[int],
     alpha: float,
     beta: float,
     evaluator,
     tie_break: str,
     deadline_at: Optional[float],
     stats: Dict[str, int],
-    tt: Dict[tuple[int, int], TTEntry],
+    tt: Dict[tuple[int, int, int], TTEntry],
     killer_moves: List[Optional[Move]],
     max_quiescence_depth: int,
     root_legal_moves: Optional[List[Move]] = None,
 ) -> tuple[float, Optional[Move]]:
     """Run depth-limited minimax with alpha-beta pruning, TT, killer moves, and undo/redo."""
     _check_deadline(deadline_at)
+    if remaining_game_moves is not None and remaining_game_moves <= 0:
+        return evaluator(board, root_player), None
     if depth == 0 and not _is_terminal(board) and max_quiescence_depth > 0:
         return _quiescence(
             board,
             to_move,
             root_player,
             max_quiescence_depth,
+            remaining_game_moves,
             alpha,
             beta,
             evaluator,
@@ -362,7 +376,7 @@ def _minimax(
     alpha_orig = alpha
     beta_orig = beta
 
-    tt_key = _make_tt_key(board, to_move)
+    tt_key = _make_tt_key(board, to_move, TT_MODE_FULL, remaining_game_moves)
     tt_entry = tt.get(tt_key)
 
     if tt_entry is not None and tt_entry.depth >= depth:
@@ -392,6 +406,7 @@ def _minimax(
     maximizing = to_move == root_player
     opponent = _opponent(to_move)
     best_move = None
+    next_remaining_game_moves = None if remaining_game_moves is None else remaining_game_moves - 1
 
     if maximizing:
         best_value = -inf
@@ -404,6 +419,7 @@ def _minimax(
                     opponent,
                     root_player,
                     depth - 1,
+                    next_remaining_game_moves,
                     alpha,
                     beta,
                     evaluator,
@@ -437,6 +453,7 @@ def _minimax(
                     opponent,
                     root_player,
                     depth - 1,
+                    next_remaining_game_moves,
                     alpha,
                     beta,
                     evaluator,
@@ -546,6 +563,7 @@ def _search_best_move_python(
 ) -> SearchResult:
     """Run the Python search path, including quiescence when configured."""
     requested_depth = resolved_config.depth
+    remaining_game_moves = resolved_config.remaining_game_moves
     start = time.perf_counter()
     deadline_at = None
     if resolved_config.time_budget_ms and resolved_config.time_budget_ms > 0:
@@ -585,9 +603,10 @@ def _search_best_move_python(
     timed_out = False
     root_candidates: List[Dict[str, object]] = []
 
-    tt: Dict[tuple[int, int], TTEntry] = {}
+    tt: Dict[tuple[int, int, int], TTEntry] = {}
     killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
     opponent = _opponent(player)
+    child_remaining_game_moves = None if remaining_game_moves is None else max(0, remaining_game_moves - 1)
 
     for depth in range(1, requested_depth + 1):
         stats = {"nodes": 0}
@@ -601,7 +620,7 @@ def _search_best_move_python(
         depth_candidates: List[Dict[str, object]] = []
 
         try:
-            tt_key = _make_tt_key(board, player)
+            tt_key = _make_tt_key(board, player, TT_MODE_FULL, remaining_game_moves)
             tt_entry = tt.get(tt_key)
             tt_move = tt_entry.move if tt_entry is not None else None
             ordered_moves = _ordered_moves(board, player, legal_moves, tt_move, killer_moves, depth)
@@ -616,6 +635,7 @@ def _search_best_move_python(
                         opponent,
                         player,
                         depth - 1,
+                        child_remaining_game_moves,
                         alpha,
                         beta,
                         resolved_agent.evaluator,

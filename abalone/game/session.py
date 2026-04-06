@@ -376,6 +376,12 @@ class GameSession:
             return int(self.config.ai_depth)
         return int(agent.default_depth)
 
+    def _remaining_game_moves(self) -> Optional[int]:
+        """Return plies left before the session reaches the max-moves cutoff."""
+        if self.config.max_moves <= 0:
+            return None
+        return max(0, self.config.max_moves - len(self.move_history))
+
     def apply_agent_move(self) -> dict:
         """Ask the minimax agent for a move and apply it on AI-controlled turns."""
         error = self._before_turn_action()
@@ -403,6 +409,7 @@ class GameSession:
                 is_opening_turn=(self.current_player == BLACK and not self.move_history),
                 avoid_move=avoid_move,
                 board_token_before=board_token_before,
+                remaining_game_moves=self._remaining_game_moves(),
             ),
         )
         search_payload = search_result.as_dict()
