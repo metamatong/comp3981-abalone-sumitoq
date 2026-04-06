@@ -16,6 +16,10 @@ EXACT = 0
 LOWERBOUND = 1
 UPPERBOUND = 2
 
+# Search-mode keys for shared TT storage.
+TT_MODE_FULL = 0
+TT_MODE_QUIESCENCE = 1
+
 
 @dataclass
 class TTEntry:
@@ -95,6 +99,142 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
     return ahead is not None and board.cells[ahead] == opponent
 
 
+def _is_quiescence_move(board: Board, player: int, move: Move) -> bool:
+    """Return whether a legal move is tactical enough to extend beyond the nominal leaf."""
+    return _is_push_move(board, player, move)
+
+
+def _quiescence(
+    board: Board,
+    to_move: int,
+    root_player: int,
+    remaining_depth: int,
+    alpha: float,
+    beta: float,
+    evaluator,
+    tie_break: str,
+    deadline_at: Optional[float],
+    stats: Dict[str, int],
+    tt: Dict[Tuple[int, int], TTEntry],
+) -> Tuple[float, Optional[Move]]:
+    """Extend only tactical leaf moves to reduce horizon effects in noisy positions."""
+    _check_deadline(deadline_at)
+    stats["nodes"] += 1
+    alpha_orig = alpha
+    beta_orig = beta
+
+    tt_key = _make_tt_key(board, to_move, TT_MODE_QUIESCENCE)
+    tt_entry = tt.get(tt_key)
+    if tt_entry is not None and tt_entry.depth >= remaining_depth:
+        if tt_entry.flag == EXACT:
+            return tt_entry.value, tt_entry.move
+        if tt_entry.flag == LOWERBOUND:
+            alpha = max(alpha, tt_entry.value)
+        elif tt_entry.flag == UPPERBOUND:
+            beta = min(beta, tt_entry.value)
+        if alpha >= beta:
+            return tt_entry.value, tt_entry.move
+
+    tt_move = tt_entry.move if tt_entry is not None else None
+
+    stand_pat = evaluator(board, root_player)
+    if remaining_depth <= 0 or _is_terminal(board):
+        tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=EXACT, move=None)
+        return stand_pat, None
+
+    maximizing = to_move == root_player
+    if maximizing:
+        if stand_pat >= beta:
+            tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=LOWERBOUND, move=None)
+            return stand_pat, None
+        alpha = max(alpha, stand_pat)
+        best_value = stand_pat
+    else:
+        if stand_pat <= alpha:
+            tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=UPPERBOUND, move=None)
+            return stand_pat, None
+        beta = min(beta, stand_pat)
+        best_value = stand_pat
+
+    tactical_moves = [
+        move
+        for move in generate_legal_moves(board, to_move)
+        if _is_quiescence_move(board, to_move, move)
+    ]
+    if not tactical_moves:
+        tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=EXACT, move=None)
+        return stand_pat, None
+
+    tactical_moves = _ordered_moves(board, to_move, tactical_moves, tt_move)
+    best_move = None
+    opponent = _opponent(to_move)
+
+    if maximizing:
+        for move in tactical_moves:
+            _check_deadline(deadline_at)
+            undo_info = board.apply_move_undo(move, to_move)
+            try:
+                value, _ = _quiescence(
+                    board,
+                    opponent,
+                    root_player,
+                    remaining_depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                )
+            finally:
+                board.undo_move(undo_info)
+
+            if value > best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
+                best_value = value
+                best_move = move
+            alpha = max(alpha, best_value)
+            if beta <= alpha:
+                break
+    else:
+        for move in tactical_moves:
+            _check_deadline(deadline_at)
+            undo_info = board.apply_move_undo(move, to_move)
+            try:
+                value, _ = _quiescence(
+                    board,
+                    opponent,
+                    root_player,
+                    remaining_depth - 1,
+                    alpha,
+                    beta,
+                    evaluator,
+                    tie_break,
+                    deadline_at,
+                    stats,
+                    tt,
+                )
+            finally:
+                board.undo_move(undo_info)
+
+            if value < best_value or (value == best_value and _prefer_by_tie_break(tie_break, move, best_move)):
+                best_value = value
+                best_move = move
+            beta = min(beta, best_value)
+            if beta <= alpha:
+                break
+
+    if best_value <= alpha_orig:
+        flag = UPPERBOUND
+    elif best_value >= beta_orig:
+        flag = LOWERBOUND
+    else:
+        flag = EXACT
+
+    tt[tt_key] = TTEntry(depth=remaining_depth, value=best_value, flag=flag, move=best_move)
+    return best_value, best_move
+
+
 def _ordered_moves(
     board: Board,
     player: int,
@@ -136,9 +276,9 @@ def _check_deadline(deadline_at: Optional[float]) -> None:
         raise _SearchTimeout
 
 
-def _make_tt_key(board: Board, to_move: int) -> int:
-    """Create TT hash key using Zobrist hash XOR'd with side-to-move key."""
-    return board.zhash ^ ZOBRIST[('side', to_move)]
+def _make_tt_key(board: Board, to_move: int, mode: int = TT_MODE_FULL) -> Tuple[int, int]:
+    """Create a TT key from the board hash, side to move, and search mode."""
+    return board.zhash ^ ZOBRIST[('side', to_move)], mode
 
 
 def _minimax(
@@ -152,12 +292,28 @@ def _minimax(
     tie_break: str,
     deadline_at: Optional[float],
     stats: Dict[str, int],
-    tt: Dict[int, TTEntry],
+    tt: Dict[Tuple[int, int], TTEntry],
     killer_moves: List[Optional[Move]],
+    max_quiescence_depth: int,
     root_legal_moves: Optional[List[Move]] = None,
 ) -> Tuple[float, Optional[Move]]:
     """Run depth-limited minimax with alpha-beta pruning, TT, killer moves, and undo/redo."""
     _check_deadline(deadline_at)
+    if depth == 0 and not _is_terminal(board) and max_quiescence_depth > 0:
+        return _quiescence(
+            board,
+            to_move,
+            root_player,
+            max_quiescence_depth,
+            alpha,
+            beta,
+            evaluator,
+            tie_break,
+            deadline_at,
+            stats,
+            tt,
+        )
+
     stats["nodes"] += 1
 
     alpha_orig = alpha
@@ -213,6 +369,7 @@ def _minimax(
                     stats,
                     tt,
                     killer_moves,
+                    max_quiescence_depth,
                 )
             finally:
                 board.undo_move(undo_info)
@@ -245,6 +402,7 @@ def _minimax(
                     stats,
                     tt,
                     killer_moves,
+                    max_quiescence_depth,
                 )
             finally:
                 board.undo_move(undo_info)
@@ -317,7 +475,7 @@ def search_best_move(
     root_candidates: List[Dict[str, object]] = []
 
     # Shared across iterative deepening iterations
-    tt: Dict[int, TTEntry] = {}
+    tt: Dict[Tuple[int, int], TTEntry] = {}
     killer_moves: List[Optional[Move]] = [None] * (requested_depth + 1)
     opponent = _opponent(player)
 
@@ -357,6 +515,7 @@ def search_best_move(
                         stats,
                         tt,
                         killer_moves,
+                        resolved_config.max_quiescence_depth,
                     )
                 finally:
                     board.undo_move(undo_info)
