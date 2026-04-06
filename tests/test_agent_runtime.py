@@ -1,3 +1,4 @@
+from math import inf
 import contextlib
 import io
 import re
@@ -8,7 +9,7 @@ from unittest import mock
 from abalone import native
 from abalone.ai.agent import choose_move, choose_move_with_info
 from abalone.ai.heuristics import evaluate_board
-from abalone.ai.minimax import SearchResult
+from abalone.ai.minimax import TT_MODE_QUIESCENCE, _make_tt_key, _quiescence, SearchResult
 from abalone.ai.types import AgentConfig, AgentDefinition
 from abalone.game.board import BLACK, WHITE, Board
 from abalone.game.config import GameConfig, MODE_AVA, MODE_HVA
@@ -94,6 +95,16 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertEqual(black_move["agent_id"], "kyle")
         self.assertEqual(white_move["agent_id"], "jonah")
+
+    def test_available_agent_metadata_includes_quiescence_depth(self):
+        session = GameSession(config=GameConfig(mode=MODE_AVA, ai_depth=1), opening_seed=5)
+        session.reset()
+
+        state = session.state_json()
+        default_agent = next(agent for agent in state["available_agents"] if agent["id"] == "default")
+
+        self.assertIn("max_quiescence_depth", default_agent)
+        self.assertEqual(default_agent["max_quiescence_depth"], 0)
 
     def test_session_uses_agent_default_depth_when_global_override_is_unset(self):
         board = Board()
@@ -242,6 +253,104 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(result.decision_source, "timeout_fallback_partial")
         self.assertEqual(result.completed_depth, 0)
 
+    def test_quiescence_depth_from_agent_definition_can_be_overridden_to_zero(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        plain_agent = AgentDefinition(
+            id="plain",
+            label="Plain",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=0,
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=4,
+        )
+
+        plain = choose_move_with_info(
+            board,
+            WHITE,
+            agent=plain_agent,
+            config=AgentConfig(depth=1, is_opening_turn=False),
+        )
+        quiet = choose_move_with_info(
+            board,
+            WHITE,
+            agent=quiet_agent,
+            config=AgentConfig(depth=1, is_opening_turn=False),
+        )
+        override_disabled = choose_move_with_info(
+            board,
+            WHITE,
+            agent=quiet_agent,
+            config=AgentConfig(depth=1, is_opening_turn=False, max_quiescence_depth=0),
+        )
+
+        self.assertTrue(board.is_legal_move(plain.move, WHITE))
+        self.assertTrue(board.is_legal_move(quiet.move, WHITE))
+        self.assertGreater(plain.score, quiet.score)
+        self.assertGreater(quiet.nodes, plain.nodes)
+        self.assertTrue(board.is_legal_move(override_disabled.move, WHITE))
+        self.assertEqual(override_disabled.move.to_notation(), plain.move.to_notation())
+        self.assertEqual(override_disabled.score, plain.score)
+
+    def test_quiescence_stores_and_reuses_distinct_tt_entries(self):
+        board = Board.from_compact_token(
+            "a1b,a2b,a3b,a5b,b1b,b2b,b3b,b4b,b5b,b6b,c3b,d4b,d5b,e5b,"
+            "f5w,g4w,g5w,g7w,h4w,h5w,h6w,h7w,h8w,h9w,i5w,i7w,i8w,i9w|0-0"
+        )
+        tt = {}
+        q_key = _make_tt_key(board, WHITE, TT_MODE_QUIESCENCE)
+        full_key = _make_tt_key(board, WHITE)
+
+        first_stats = {"nodes": 0}
+        first_score, first_move = _quiescence(
+            board,
+            WHITE,
+            WHITE,
+            4,
+            -inf,
+            inf,
+            evaluate_board,
+            "lexicographic",
+            None,
+            first_stats,
+            tt,
+        )
+        second_stats = {"nodes": 0}
+        second_score, second_move = _quiescence(
+            board,
+            WHITE,
+            WHITE,
+            4,
+            -inf,
+            inf,
+            evaluate_board,
+            "lexicographic",
+            None,
+            second_stats,
+            tt,
+        )
+
+        self.assertIn(q_key, tt)
+        self.assertNotEqual(q_key, full_key)
+        self.assertNotIn(full_key, tt)
+        if first_move is None:
+            self.assertIsNone(second_move)
+        else:
+            self.assertEqual(first_move.to_notation(), second_move.to_notation())
+        self.assertEqual(first_score, second_score)
+        self.assertGreater(first_stats["nodes"], 1)
+        self.assertEqual(second_stats["nodes"], 1)
+
     def test_repetition_avoidance_breaks_loop(self):
         session = GameSession(config=GameConfig(mode=MODE_AVA, ai_depth=1), opening_seed=3)
         session.reset()
@@ -326,11 +435,13 @@ class AgentRuntimeTests(unittest.TestCase):
             "--seed", "9",
         ]
         stdout_one = io.StringIO()
-        with contextlib.redirect_stdout(stdout_one):
+        stderr_one = io.StringIO()
+        with contextlib.redirect_stdout(stdout_one), contextlib.redirect_stderr(stderr_one):
             match_main(argv)
 
         stdout_two = io.StringIO()
-        with contextlib.redirect_stdout(stdout_two):
+        stderr_two = io.StringIO()
+        with contextlib.redirect_stdout(stdout_two), contextlib.redirect_stderr(stderr_two):
             match_main(argv)
 
         output_one = stdout_one.getvalue()
@@ -370,7 +481,8 @@ class AgentRuntimeTests(unittest.TestCase):
 
         with mock.patch("abalone.game.match._run_game", side_effect=[fake_game, fake_game]):
             stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 match_main(
                     [
                         "--black-ai", "default",
@@ -383,6 +495,92 @@ class AgentRuntimeTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("partial_searches=4", output)
         self.assertIn("kyle: W=0 L=2 D=0 captures=2 partial_searches=0", output)
+
+    def test_match_mode_updates_progress_display(self):
+        first_game = {
+            "winner": BLACK,
+            "reason": "max_moves",
+            "history": [],
+            "score": {BLACK: 2, WHITE: 1},
+            "black_ai_id": "default",
+            "white_ai_id": "kyle",
+        }
+        second_game = {
+            "winner": WHITE,
+            "reason": "max_moves",
+            "history": [],
+            "score": {BLACK: 1, WHITE: 3},
+            "black_ai_id": "kyle",
+            "white_ai_id": "default",
+        }
+        progress = mock.Mock()
+
+        with mock.patch("abalone.game.match.resolve_worker_count", return_value=1):
+            with mock.patch("abalone.game.match._run_game", side_effect=[first_game, second_game]):
+                with mock.patch("abalone.game.match._MatchProgressDisplay", return_value=progress) as display_cls:
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        match_main(
+                            [
+                                "--black-ai", "default",
+                                "--white-ai", "kyle",
+                                "--rounds", "1",
+                                "--depth", "1",
+                            ]
+                        )
+
+        display_cls.assert_called_once_with(game_count=2, worker_count=1)
+        progress.start.assert_called_once_with()
+        progress.finish.assert_called_once_with()
+        self.assertEqual(progress.update.call_count, 2)
+        self.assertEqual(progress.update.call_args_list[0].args, (1, first_game))
+        self.assertEqual(progress.update.call_args_list[1].args, (2, second_game))
+
+    def test_match_mode_passes_jobs_to_parallel_scheduler(self):
+        games = [
+            {
+                "index": 0,
+                "winner": BLACK,
+                "reason": "max_moves",
+                "history": [],
+                "score": {BLACK: 2, WHITE: 1},
+                "black_ai_id": "default",
+                "white_ai_id": "kyle",
+            },
+            {
+                "index": 1,
+                "winner": WHITE,
+                "reason": "max_moves",
+                "history": [],
+                "score": {BLACK: 1, WHITE: 3},
+                "black_ai_id": "kyle",
+                "white_ai_id": "default",
+            },
+        ]
+
+        with mock.patch("abalone.game.match.resolve_worker_count", return_value=2) as resolve_count:
+            with mock.patch("abalone.game.match._run_scheduled_matches", return_value=games) as run_matches:
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    match_main(
+                        [
+                            "--black-ai", "default",
+                            "--white-ai", "kyle",
+                            "--rounds", "1",
+                            "--depth", "1",
+                            "--jobs", "4",
+                        ]
+                    )
+
+        resolve_count.assert_called_once_with(4, 2)
+        scheduled_games, worker_count, _progress = run_matches.call_args.args
+        self.assertEqual(worker_count, 2)
+        self.assertEqual(len(scheduled_games), 2)
+        self.assertEqual(scheduled_games[0]["black_ai_id"], "default")
+        self.assertEqual(scheduled_games[0]["white_ai_id"], "kyle")
+        self.assertEqual(scheduled_games[1]["black_ai_id"], "kyle")
+        self.assertEqual(scheduled_games[1]["white_ai_id"], "default")
 
 
 if __name__ == "__main__":

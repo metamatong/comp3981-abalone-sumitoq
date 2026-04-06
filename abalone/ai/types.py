@@ -18,6 +18,7 @@ class AgentDefinition:
     evaluator: Evaluator
     default_depth: int = 5
     tie_break: str = "lexicographic"
+    max_quiescence_depth: int = 0
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class AgentConfig:
 
     depth: Optional[int] = None
     tie_break: Optional[str] = None
+    max_quiescence_depth: Optional[int] = None
     time_budget_ms: Optional[int] = None
     opening_seed: Optional[int] = None
     is_opening_turn: bool = False
@@ -41,6 +43,7 @@ class ResolvedAgentConfig:
 
     depth: int
     tie_break: str
+    max_quiescence_depth: int
     time_budget_ms: Optional[int]
     opening_seed: Optional[int]
     is_opening_turn: bool
@@ -56,6 +59,14 @@ def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] =
     return ResolvedAgentConfig(
         depth=config.depth if config.depth is not None else agent.default_depth,
         tie_break=config.tie_break if config.tie_break is not None else agent.tie_break,
+        max_quiescence_depth=max(
+            0,
+            int(
+                config.max_quiescence_depth
+                if config.max_quiescence_depth is not None
+                else agent.max_quiescence_depth
+            ),
+        ),
         time_budget_ms=config.time_budget_ms,
         opening_seed=config.opening_seed,
         is_opening_turn=config.is_opening_turn,

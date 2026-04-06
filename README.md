@@ -196,6 +196,33 @@ Use these preset IDs with `--black-ai` and `--white-ai`:
 - Each member preset currently starts with the same copied baseline weights, but those files are independent and can diverge without affecting `default`
 - Adaptive tuning runs do not rewrite these source files; mutable weights are checkpointed under `abalone/eval_runs/`
 
+### Enabling Quiescence Search
+
+Quiescence search is configured per preset through `AgentDefinition.max_quiescence_depth` in each team's `agents.py`.
+
+- `0` disables quiescence search. This is the default.
+- `2` is the recommended starting point for normal play.
+- `3` is reasonable for experiments if move times are still acceptable.
+- Higher values are mainly useful for analysis runs and can become expensive.
+
+Example:
+
+```python
+AGENTS = [
+    AgentDefinition(
+        id="kyle",
+        label="Kyle",
+        owner="Kyle",
+        evaluator=evaluate_kyle,
+        default_depth=4,
+        tie_break="lexicographic",
+        max_quiescence_depth=2,
+    )
+]
+```
+
+If you call the search API directly, you can also override this at runtime with `AgentConfig(max_quiescence_depth=...)`. Setting `AgentConfig(max_quiescence_depth=0)` forces quiescence off even if the preset enables it.
+
 ### Common CLI Modes
 
 ```bash
@@ -227,6 +254,7 @@ python3 run.py cli --mode ava --depth 2 --black-ai kyle --white-ai cole
 - Black's first AI move is a random legal move, as required for the project.
 - After the opening move, all AI turns use the native-backed search path exposed through `abalone/ai/minimax.py`.
 - The search uses iterative deepening and respects the remaining per-turn budget.
+- When `max_quiescence_depth > 0`, leaf nodes can extend through a bounded quiescence search over tactical push/contact moves.
 - If a search runs out of time before completing a depth, it returns the best fully completed result so far.
 - If no depth finishes in time, it falls back to an immediate legal move.
 
@@ -713,5 +741,4 @@ All fields are optional â€” send only the ones you want to change.
 | `player2_time_per_turn_s` | int | `30` | White's per-turn time limit in seconds |
 
 Fixed `--seed` values make the random black opening reproducible across benchmark runs.
-
 

@@ -10,4 +10,5 @@ DEFAULT_AGENT = AgentDefinition(
     evaluator=evaluate_board,
     default_depth=2,
     tie_break="lexicographic",
+    max_quiescence_depth=0,
 )
