@@ -21,6 +21,9 @@
 #define LOWERBOUND 1
 #define UPPERBOUND 2
 
+#define TT_MODE_FULL 0
+#define TT_MODE_QUIESCENCE 1
+
 extern const int8_t DIR_DR[DIR_COUNT];
 extern const int8_t DIR_DC[DIR_COUNT];
 extern const uint8_t OPPOSITE_DIR[DIR_COUNT];
@@ -133,8 +136,11 @@ int search_weighted_native(
     int player,
     const double *weights,
     int requested_depth,
+    int max_quiescence_depth,
     int has_deadline,
     int time_budget_ms,
+    int has_remaining_game_moves,
+    int remaining_game_moves,
     int tie_break_lexicographic,
     const NativeMove *avoid_move,
     int root_candidate_limit,

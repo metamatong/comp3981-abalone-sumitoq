@@ -393,7 +393,7 @@ def evaluate_with_weights(board: Board, player: int, weights: Dict[str, float]) 
     return _get_native_evaluate_weighted()(
         board,
         player,
-        (resolved_weights[key] for key in FEATURE_ORDER),
+        (resolved_weights.get(key, 0.0) for key in FEATURE_ORDER),
     )
 
 

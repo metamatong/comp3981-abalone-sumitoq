@@ -4,15 +4,15 @@ from ....ai.heuristics import build_weighted_evaluator
 
 # German Daisy: 80 total game moves, 10s per move.
 GERMAN_DAISY_WEIGHTS = {
-    "marble": 40000.0,
-    "center": 500.0,
-    "cohesion": 100.0,
-    "cluster": 30.0,
-    "edge_pressure": 70.0,
-    "formation": 120.0,
-    "push": 120.0,
-    "mobility": 20.0,
-    "stability": 30.0,
+    "marble": 41072.002228,
+    "center": 555.088303,
+    "cohesion": 110.633331,
+    "cluster": 32.72568,
+    "edge_pressure": 76.348758,
+    "formation": 126.781307,
+    "push": 111.278449,
+    "mobility": 18.202237,
+    "stability": 32.83995,
 }
 
 evaluate_german_daisy = build_weighted_evaluator(GERMAN_DAISY_WEIGHTS)

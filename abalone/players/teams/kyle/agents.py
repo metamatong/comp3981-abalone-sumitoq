@@ -11,5 +11,6 @@ AGENTS = [
         evaluator=evaluate_kyle,
         default_depth=6,
         tie_break="lexicographic",
+        max_quiescence_depth=9,
     )
 ]

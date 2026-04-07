@@ -270,7 +270,9 @@ py_search_weighted(PyObject *self, PyObject *args)
     int player;
     PyObject *weights_obj;
     int depth;
+    int max_quiescence_depth;
     PyObject *time_budget_obj;
+    PyObject *remaining_game_moves_obj;
     PyObject *tie_break_obj;
     PyObject *avoid_move_obj;
     int root_candidate_limit;
@@ -288,6 +290,8 @@ py_search_weighted(PyObject *self, PyObject *args)
     PyObject *avoidance_payload;
     int has_deadline = 0;
     int time_budget_ms = 0;
+    int has_remaining_game_moves = 0;
+    int remaining_game_moves = 0;
     int tie_break_lexicographic;
     int status;
     int idx;
@@ -298,14 +302,16 @@ py_search_weighted(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(
             args,
-            "y*iiiOiOOOi",
+            "y*iiiOiiOOOOi",
             &cells_buffer,
             &black_score,
             &white_score,
             &player,
             &weights_obj,
             &depth,
+            &max_quiescence_depth,
             &time_budget_obj,
+            &remaining_game_moves_obj,
             &tie_break_obj,
             &avoid_move_obj,
             &root_candidate_limit)) {
@@ -338,6 +344,17 @@ py_search_weighted(PyObject *self, PyObject *args)
         has_deadline = 1;
         time_budget_ms = (int) value;
     }
+    if (remaining_game_moves_obj != Py_None) {
+        long value = PyLong_AsLong(remaining_game_moves_obj);
+        if (value < 0 || PyErr_Occurred()) {
+            if (!PyErr_Occurred()) {
+                PyErr_SetString(PyExc_ValueError, "remaining_game_moves must be non-negative");
+            }
+            return NULL;
+        }
+        has_remaining_game_moves = 1;
+        remaining_game_moves = (int) value;
+    }
 
     if (!parse_optional_move_payload(avoid_move_obj, &avoid_move)) {
         return NULL;
@@ -355,8 +372,11 @@ py_search_weighted(PyObject *self, PyObject *args)
         player,
         weights,
         depth,
+        max_quiescence_depth,
         has_deadline,
         time_budget_ms,
+        has_remaining_game_moves,
+        remaining_game_moves,
         tie_break_lexicographic,
         &avoid_move,
         root_candidate_limit,

@@ -373,6 +373,111 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(override_disabled.move.to_notation(), plain.move.to_notation())
         self.assertEqual(override_disabled.score, plain.score)
 
+    def test_native_quiescence_matches_python_reference(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=4,
+        )
+        config = AgentConfig(depth=1, is_opening_turn=False)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+            expected = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            actual = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+
+        self.assertTrue(board.is_legal_move(actual.move, WHITE))
+        self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
+        self.assertAlmostEqual(actual.score, expected.score)
+        self.assertEqual(actual.completed_depth, expected.completed_depth)
+        self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_native_quiescence_root_candidates_match_python_reference(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=4,
+        )
+        config = AgentConfig(depth=1, is_opening_turn=False, root_candidate_limit=3)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+            expected = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            actual = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+
+        self.assertEqual(actual.root_candidates, expected.root_candidates)
+
+    def test_native_quiescence_respects_remaining_game_moves_reference(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=4,
+        )
+        config = AgentConfig(depth=1, is_opening_turn=False, remaining_game_moves=1)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+            expected = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            actual = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+
+        self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
+        self.assertAlmostEqual(actual.score, expected.score)
+        self.assertEqual(actual.completed_depth, expected.completed_depth)
+        self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_native_quiescence_does_not_run_when_no_game_moves_remain(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+        quiet_agent = AgentDefinition(
+            id="quiet",
+            label="Quiet",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=10,
+        )
+        plain_agent = AgentDefinition(
+            id="plain",
+            label="Plain",
+            owner="Test",
+            evaluator=evaluate_board,
+            default_depth=1,
+            max_quiescence_depth=0,
+        )
+        config = AgentConfig(depth=1, is_opening_turn=False, remaining_game_moves=1)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            quiet = choose_move_with_info(board, WHITE, agent=quiet_agent, config=config)
+            plain = choose_move_with_info(board, WHITE, agent=plain_agent, config=config)
+
+        self.assertEqual(quiet.move.to_notation(), plain.move.to_notation())
+        self.assertAlmostEqual(quiet.score, plain.score)
+        self.assertEqual(quiet.completed_depth, plain.completed_depth)
+        self.assertEqual(quiet.decision_source, plain.decision_source)
+
     def test_quiescence_stores_and_reuses_distinct_tt_entries(self):
         board = Board.from_compact_token(
             "a1b,a2b,a3b,a5b,b1b,b2b,b3b,b4b,b5b,b6b,c3b,d4b,d5b,e5b,"
@@ -509,13 +614,15 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         stdout_one = io.StringIO()
         stderr_one = io.StringIO()
-        with contextlib.redirect_stdout(stdout_one), contextlib.redirect_stderr(stderr_one):
-            match_main(argv)
+        with mock.patch("abalone.game.match.resolve_worker_count", return_value=1):
+            with contextlib.redirect_stdout(stdout_one), contextlib.redirect_stderr(stderr_one):
+                match_main(argv)
 
         stdout_two = io.StringIO()
         stderr_two = io.StringIO()
-        with contextlib.redirect_stdout(stdout_two), contextlib.redirect_stderr(stderr_two):
-            match_main(argv)
+        with mock.patch("abalone.game.match.resolve_worker_count", return_value=1):
+            with contextlib.redirect_stdout(stdout_two), contextlib.redirect_stderr(stderr_two):
+                match_main(argv)
 
         output_one = stdout_one.getvalue()
         output_two = stdout_two.getvalue()
@@ -552,18 +659,19 @@ class AgentRuntimeTests(unittest.TestCase):
             "white_ai_id": "kyle",
         }
 
-        with mock.patch("abalone.game.match._run_game", side_effect=[fake_game, fake_game]):
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                match_main(
-                    [
-                        "--black-ai", "default",
-                        "--white-ai", "kyle",
-                        "--rounds", "1",
-                        "--depth", "1",
-                    ]
-                )
+        with mock.patch("abalone.game.match.resolve_worker_count", return_value=1):
+            with mock.patch("abalone.game.match._run_game", side_effect=[fake_game, fake_game]):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    match_main(
+                        [
+                            "--black-ai", "default",
+                            "--white-ai", "kyle",
+                            "--rounds", "1",
+                            "--depth", "1",
+                        ]
+                    )
 
         output = stdout.getvalue()
         self.assertIn("partial_searches=4", output)
