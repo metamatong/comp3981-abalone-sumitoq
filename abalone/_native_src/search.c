@@ -269,7 +269,7 @@ quiescence_native(
     }
 
     stand_pat = evaluate_weighted_native(board, root_player, ctx->weights);
-    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves == 0) {
+    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves <= 0) {
         move_clear(out_move);
         if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
             return -1;
@@ -437,7 +437,7 @@ minimax_native(
     if (deadline_reached(ctx)) {
         return 1;
     }
-    if (remaining_game_moves == 0) {
+    if (remaining_game_moves <= 0) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
         return 0;
