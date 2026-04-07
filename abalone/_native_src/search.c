@@ -118,11 +118,14 @@ tt_store(TTTable *table, uint64_t key, int depth, double value, uint8_t flag, co
     return 1;
 }
 
-/* Builds the transposition key for a board plus side to move. */
+/* Builds the transposition key for a board, side, search mode, and move budget. */
 static uint64_t
-tt_key_for_board(const BoardState *board, int to_move)
+tt_key_for_state(const BoardState *board, int to_move, int mode, int remaining_game_moves)
 {
-    return board->zhash ^ g_side_zobrist[to_move];
+    uint64_t key = board->zhash ^ g_side_zobrist[to_move];
+    uint64_t remaining_key = remaining_game_moves < 0 ? 1ULL : (uint64_t) remaining_game_moves + 2ULL;
+    key ^= mix_hash64((((uint64_t) mode) << 32) ^ remaining_key);
+    return key;
 }
 
 /* Checks whether the active search deadline has been reached. */
@@ -130,6 +133,19 @@ static int
 deadline_reached(const SearchContext *ctx)
 {
     return ctx->deadline_at >= 0.0 && monotonic_seconds() >= ctx->deadline_at;
+}
+
+/* Reports whether a move is tactical enough to extend quiescence. */
+static int
+is_quiescence_move_native(const BoardState *board, int player, const NativeMove *move)
+{
+    int opponent = player == BLACK ? WHITE : BLACK;
+    uint8_t ahead;
+    if (!move->is_inline || move->count < 2) {
+        return 0;
+    }
+    ahead = g_neighbors[move->leading][move->dir_idx];
+    return ahead != INVALID_INDEX && board->cells[ahead] == (uint8_t) opponent;
 }
 
 /* Applies an inline move and resolves any pushed opposing marbles. */
@@ -192,6 +208,202 @@ apply_move_native(BoardState *board, const NativeMove *move, int player)
     }
 }
 
+/* Extends tactical leaf positions to reduce horizon effects. */
+static int
+quiescence_native(
+    const BoardState *board,
+    int to_move,
+    int root_player,
+    int remaining_depth,
+    int remaining_game_moves,
+    double alpha,
+    double beta,
+    SearchContext *ctx,
+    uint64_t *nodes,
+    double *out_value,
+    NativeMove *out_move
+)
+{
+    double initial_alpha = alpha;
+    double initial_beta = beta;
+    uint64_t key;
+    TTEntry *entry;
+    NativeMove tt_move;
+    NativeMove best_move;
+    double stand_pat;
+    int maximizing;
+    double best_value;
+    NativeMove legal_moves[MAX_MOVES];
+    NativeMove tactical_moves[MAX_MOVES];
+    int legal_count;
+    int tactical_count = 0;
+    int move_index;
+    int opponent;
+
+    if (deadline_reached(ctx)) {
+        return 1;
+    }
+    *nodes += 1;
+
+    key = tt_key_for_state(board, to_move, TT_MODE_QUIESCENCE, remaining_game_moves);
+    entry = tt_lookup(&ctx->tt, key);
+    if (entry != NULL && entry->depth >= remaining_depth) {
+        if (entry->flag == EXACT) {
+            *out_value = entry->value;
+            *out_move = entry->move;
+            return 0;
+        }
+        if (entry->flag == LOWERBOUND && entry->value > alpha) {
+            alpha = entry->value;
+        } else if (entry->flag == UPPERBOUND && entry->value < beta) {
+            beta = entry->value;
+        }
+        if (alpha >= beta) {
+            *out_value = entry->value;
+            *out_move = entry->move;
+            return 0;
+        }
+        tt_move = entry->move;
+    } else {
+        move_clear(&tt_move);
+    }
+
+    stand_pat = evaluate_weighted_native(board, root_player, ctx->weights);
+    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves == 0) {
+        move_clear(out_move);
+        if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
+            return -1;
+        }
+        *out_value = stand_pat;
+        return 0;
+    }
+
+    maximizing = to_move == root_player;
+    if (maximizing) {
+        if (stand_pat >= beta) {
+            move_clear(out_move);
+            if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, LOWERBOUND, out_move)) {
+                return -1;
+            }
+            *out_value = stand_pat;
+            return 0;
+        }
+        if (stand_pat > alpha) {
+            alpha = stand_pat;
+        }
+        best_value = stand_pat;
+    } else {
+        if (stand_pat <= alpha) {
+            move_clear(out_move);
+            if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, UPPERBOUND, out_move)) {
+                return -1;
+            }
+            *out_value = stand_pat;
+            return 0;
+        }
+        if (stand_pat < beta) {
+            beta = stand_pat;
+        }
+        best_value = stand_pat;
+    }
+
+    legal_count = generate_legal_moves_native(board, to_move, legal_moves);
+    if (legal_count < 0) {
+        return -1;
+    }
+    for (move_index = 0; move_index < legal_count; ++move_index) {
+        if (is_quiescence_move_native(board, to_move, &legal_moves[move_index])) {
+            tactical_moves[tactical_count++] = legal_moves[move_index];
+        }
+    }
+    if (tactical_count == 0) {
+        move_clear(out_move);
+        if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
+            return -1;
+        }
+        *out_value = stand_pat;
+        return 0;
+    }
+
+    move_clear(&best_move);
+    order_moves(board, to_move, tactical_moves, tactical_count, &tt_move, &best_move);
+    opponent = to_move == BLACK ? WHITE : BLACK;
+
+    for (move_index = 0; move_index < tactical_count; ++move_index) {
+        BoardState child = *board;
+        double child_value = 0.0;
+        NativeMove ignored;
+        int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+        int status;
+
+        if (deadline_reached(ctx)) {
+            return 1;
+        }
+
+        apply_move_native(&child, &tactical_moves[move_index], to_move);
+        status = quiescence_native(
+            &child,
+            opponent,
+            root_player,
+            remaining_depth - 1,
+            child_remaining_game_moves,
+            alpha,
+            beta,
+            ctx,
+            nodes,
+            &child_value,
+            &ignored
+        );
+        if (status != 0) {
+            return status;
+        }
+
+        if (maximizing) {
+            if (child_value > best_value ||
+                    (child_value == best_value &&
+                        prefer_by_tie_break(ctx->tie_break_lexicographic, &tactical_moves[move_index], &best_move))) {
+                best_value = child_value;
+                best_move = tactical_moves[move_index];
+            }
+            if (best_value > alpha) {
+                alpha = best_value;
+            }
+            if (beta <= alpha) {
+                break;
+            }
+        } else {
+            if (child_value < best_value ||
+                    (child_value == best_value &&
+                        prefer_by_tie_break(ctx->tie_break_lexicographic, &tactical_moves[move_index], &best_move))) {
+                best_value = child_value;
+                best_move = tactical_moves[move_index];
+            }
+            if (best_value < beta) {
+                beta = best_value;
+            }
+            if (beta <= alpha) {
+                break;
+            }
+        }
+    }
+
+    {
+        uint8_t flag = EXACT;
+        if (best_value <= initial_alpha) {
+            flag = UPPERBOUND;
+        } else if (best_value >= initial_beta) {
+            flag = LOWERBOUND;
+        }
+        if (!tt_store(&ctx->tt, key, remaining_depth, best_value, flag, &best_move)) {
+            return -1;
+        }
+    }
+
+    *out_value = best_value;
+    *out_move = best_move;
+    return 0;
+}
+
 /* Recursively searches the game tree with alpha-beta pruning and TT support. */
 static int
 minimax_native(
@@ -199,6 +411,8 @@ minimax_native(
     int to_move,
     int root_player,
     int depth,
+    int remaining_game_moves,
+    int max_quiescence_depth,
     double alpha,
     double beta,
     SearchContext *ctx,
@@ -223,9 +437,29 @@ minimax_native(
     if (deadline_reached(ctx)) {
         return 1;
     }
+    if (remaining_game_moves == 0) {
+        *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
+        move_clear(out_move);
+        return 0;
+    }
+    if (depth == 0 && !board_terminal(board) && max_quiescence_depth > 0) {
+        return quiescence_native(
+            board,
+            to_move,
+            root_player,
+            max_quiescence_depth,
+            remaining_game_moves,
+            alpha,
+            beta,
+            ctx,
+            nodes,
+            out_value,
+            out_move
+        );
+    }
     *nodes += 1;
 
-    key = tt_key_for_board(board, to_move);
+    key = tt_key_for_state(board, to_move, TT_MODE_FULL, remaining_game_moves);
     entry = tt_lookup(&ctx->tt, key);
     if (entry != NULL && entry->depth >= depth) {
         if (entry->flag == EXACT) {
@@ -282,6 +516,7 @@ minimax_native(
         BoardState child = *board;
         double child_value;
         NativeMove child_best_reply;
+        int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
         int status;
 
         if (deadline_reached(ctx)) {
@@ -294,6 +529,8 @@ minimax_native(
             opponent,
             root_player,
             depth - 1,
+            child_remaining_game_moves,
+            max_quiescence_depth,
             alpha,
             beta,
             ctx,
@@ -364,8 +601,11 @@ search_weighted_native(
     int player,
     const double *weights,
     int requested_depth,
+    int max_quiescence_depth,
     int has_deadline,
     int time_budget_ms,
+    int has_remaining_game_moves,
+    int remaining_game_moves,
     int tie_break_lexicographic,
     const NativeMove *avoid_move,
     int root_candidate_limit,
@@ -447,11 +687,12 @@ search_weighted_native(
         double alpha = -INFINITY;
         double beta = INFINITY;
         int move_index;
+        int root_remaining_game_moves = has_remaining_game_moves ? remaining_game_moves : -1;
 
         memset(ctx.killer_moves, 0, sizeof(ctx.killer_moves));
 
         memcpy(ordered_root, legal_moves, sizeof(NativeMove) * legal_count);
-        root_entry = tt_lookup(&ctx.tt, tt_key_for_board(board, player));
+        root_entry = tt_lookup(&ctx.tt, tt_key_for_state(board, player, TT_MODE_FULL, root_remaining_game_moves));
         if (root_entry != NULL) {
             tt_move = root_entry->move;
         } else {
@@ -463,6 +704,7 @@ search_weighted_native(
             BoardState child = *board;
             double child_value = 0.0;
             NativeMove ignored;
+            int child_remaining_game_moves = root_remaining_game_moves < 0 ? -1 : root_remaining_game_moves - 1;
             int status;
 
             if (deadline_reached(&ctx)) {
@@ -472,7 +714,20 @@ search_weighted_native(
 
             apply_move_native(&child, &ordered_root[move_index], player);
             iteration_nodes += 1;
-            status = minimax_native(&child, opponent, player, idx - 1, alpha, beta, &ctx, &iteration_nodes, &child_value, &ignored);
+            status = minimax_native(
+                &child,
+                opponent,
+                player,
+                idx - 1,
+                child_remaining_game_moves,
+                max_quiescence_depth,
+                alpha,
+                beta,
+                &ctx,
+                &iteration_nodes,
+                &child_value,
+                &ignored
+            );
             if (status == 1) {
                 timed_out = 1;
                 break;
@@ -487,7 +742,7 @@ search_weighted_native(
                 current_best_move = ordered_root[move_index];
             }
 
-            if (root_candidate_cap > 0 && depth_candidate_count < root_candidate_cap) {
+            if (root_candidate_cap > 0 && depth_candidate_count < MAX_MOVES) {
                 depth_candidates[depth_candidate_count].move = ordered_root[move_index];
                 depth_candidates[depth_candidate_count].score = child_value;
                 depth_candidates[depth_candidate_count].depth = idx;
@@ -513,7 +768,7 @@ search_weighted_native(
             break;
         }
 
-        if (!tt_store(&ctx.tt, tt_key_for_board(board, player), idx, current_best_score, EXACT, &current_best_move)) {
+        if (!tt_store(&ctx.tt, tt_key_for_state(board, player, TT_MODE_FULL, root_remaining_game_moves), idx, current_best_score, EXACT, &current_best_move)) {
             tt_free(&ctx.tt);
             return -1;
         }

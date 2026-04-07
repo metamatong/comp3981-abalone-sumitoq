@@ -87,26 +87,26 @@ EXPECTED_MOVES = {
 }
 
 EXPECTED_EVALUATIONS = {
-    ("belgian_daisy", BLACK): 0.0,
-    ("belgian_daisy", WHITE): 0.0,
+    ("belgian_daisy", BLACK): 280.0,
+    ("belgian_daisy", WHITE): -280.0,
 }
 
 EXPECTED_SEARCHES = {
     ("standard", BLACK, "default", 2): {
         "move": "3:a1d4",
-        "score": 0.0,
+        "score": -535.0,
         "completed_depth": 2,
         "decision_source": "search",
     },
     ("belgian_daisy", WHITE, "kyle", 2): {
         "move": "3:a5d5",
-        "score": -3795.6410000000005,
+        "score": -760.492,
         "completed_depth": 2,
         "decision_source": "search",
     },
     ("german_daisy", BLACK, "jonah", 2): {
         "move": "3:b1e4",
-        "score": 0.0,
+        "score": 420.0,
         "completed_depth": 2,
         "decision_source": "search",
     },

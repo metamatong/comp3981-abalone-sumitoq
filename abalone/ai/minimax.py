@@ -22,6 +22,8 @@ UPPERBOUND = 2
 TT_MODE_FULL = 0
 TT_MODE_QUIESCENCE = 1
 
+_FORCE_WEIGHTED_SEARCH_PATH: Optional[str] = None
+
 
 @dataclass
 class TTEntry:
@@ -497,7 +499,8 @@ def search_best_move(
     resolved_agent = agent or DEFAULT_AGENT
     resolved_config = resolve_agent_config(resolved_agent, config)
     agent_weights = getattr(resolved_agent.evaluator, "weights", None)
-    use_native = bool(agent_weights) and resolved_config.max_quiescence_depth <= 0
+    force_path = _FORCE_WEIGHTED_SEARCH_PATH
+    use_native = bool(agent_weights) and force_path != "python"
     if use_native:
         return _search_best_move_native(board, player, resolved_agent, resolved_config, agent_weights)
     return _search_best_move_python(board, player, resolved_agent, resolved_config)
@@ -510,7 +513,7 @@ def _search_best_move_native(
     resolved_config,
     agent_weights,
 ) -> SearchResult:
-    """Run the native search path for weighted evaluators without quiescence."""
+    """Run the native search path for weighted evaluators."""
     ordered_weights = tuple(float(agent_weights[key]) for key in FEATURE_ORDER)
     native_start = time.perf_counter()
     native_result = native_search_weighted(
@@ -518,7 +521,9 @@ def _search_best_move_native(
         player,
         ordered_weights,
         depth=resolved_config.depth,
+        max_quiescence_depth=resolved_config.max_quiescence_depth,
         time_budget_ms=resolved_config.time_budget_ms,
+        remaining_game_moves=resolved_config.remaining_game_moves,
         tie_break=resolved_config.tie_break,
         avoid_move=resolved_config.avoid_move,
         root_candidate_limit=resolved_config.root_candidate_limit,
