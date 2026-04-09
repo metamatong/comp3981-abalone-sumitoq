@@ -196,6 +196,66 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(black_move["search"]["depth"], 2)
         self.assertEqual(white_move["search"]["depth"], 6)
 
+    def test_web_per_side_depth_config_beats_constructor_and_global_depth_overrides(self):
+        recorded_depths = []
+
+        def fake_choose(board, player, config=None, agent=None):
+            recorded_depths.append((player, config.depth))
+            move = generate_legal_moves(board, player)[0]
+            return SearchResult(
+                move=move,
+                score=0.0,
+                nodes=0,
+                elapsed_ms=0.0,
+                depth=config.depth,
+                completed_depth=0,
+                decision_source="test",
+                timed_out=False,
+                time_budget_ms=config.time_budget_ms,
+                agent_id=agent.id,
+                agent_label=agent.label,
+            )
+
+        session = GameSession(
+            config=GameConfig(
+                mode=MODE_AVA,
+                ai_depth=1,
+                black_ai_depth=4,
+                white_ai_depth=5,
+                black_ai_id="kyle",
+                white_ai_id="abdullah",
+            ),
+            opening_seed=3,
+            agent_depth_overrides={BLACK: 2, WHITE: 6},
+        )
+        session.reset()
+
+        with mock.patch("abalone.game.session.choose_move_with_info", side_effect=fake_choose):
+            black_move = session.apply_agent_move()
+            white_move = session.apply_agent_move()
+
+        self.assertTrue(black_move.get("ok"))
+        self.assertTrue(white_move.get("ok"))
+        self.assertEqual(recorded_depths, [(BLACK, 4), (WHITE, 5)])
+        self.assertEqual(black_move["search"]["depth"], 4)
+        self.assertEqual(white_move["search"]["depth"], 5)
+
+    def test_session_state_and_config_round_trip_per_side_depth_overrides(self):
+        session = GameSession(config=GameConfig(mode=MODE_AVA))
+
+        config_result = session.configure({
+            "black_ai_depth": 0,
+            "white_ai_depth": 4,
+        })
+
+        self.assertTrue(config_result.get("ok"))
+        self.assertEqual(config_result["config"]["black_ai_depth"], 0)
+        self.assertEqual(config_result["config"]["white_ai_depth"], 4)
+
+        state = session.state_json()
+        self.assertEqual(state["black_ai_depth"], 0)
+        self.assertEqual(state["white_ai_depth"], 4)
+
     def test_session_caps_search_depth_to_remaining_game_moves(self):
         board = Board()
         board.clear()
@@ -320,6 +380,37 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(board.is_legal_move(result.move, WHITE))
         self.assertEqual(result.depth, 2)
         self.assertEqual(result.completed_depth, 2)
+
+    def test_default_agent_supports_zero_depth_fallback_search(self):
+        board = Board()
+        board.setup_standard()
+
+        result = choose_move_with_info(
+            board,
+            WHITE,
+            agent=get_agent("default"),
+            config=AgentConfig(depth=0, is_opening_turn=False),
+        )
+
+        self.assertTrue(board.is_legal_move(result.move, WHITE))
+        self.assertEqual(result.depth, 0)
+        self.assertEqual(result.completed_depth, 0)
+        self.assertEqual(result.decision_source, "fallback")
+
+    def test_weighted_agent_supports_zero_depth_fallback_search(self):
+        board = Board()
+        board.setup_standard()
+
+        result = choose_move_with_info(
+            board,
+            WHITE,
+            agent=get_agent("kyle"),
+            config=AgentConfig(depth=0, is_opening_turn=False),
+        )
+
+        self.assertTrue(board.is_legal_move(result.move, WHITE))
+        self.assertEqual(result.depth, 0)
+        self.assertEqual(result.completed_depth, 0)
 
     def test_quiescence_does_not_extend_beyond_remaining_game_moves(self):
         board = Board.from_compact_token(

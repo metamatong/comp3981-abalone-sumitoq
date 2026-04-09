@@ -731,7 +731,9 @@ All fields are optional â€” send only the ones you want to change.
 |-------|------|---------|-------------|
 | `mode` | string | `"hvh"` | `hvh` (human-human), `hva` (human-AI), `ava` (AI-AI) |
 | `human_side` | string/int | `"black"` | Human color in `hva` mode |
-| `ai_depth` | int | `2` | Minimax search depth (1â€“5) |
+| `ai_depth` | int | `2` | Legacy shared AI search-depth override; web per-side depth fields take precedence when set |
+| `black_ai_depth` | int | preset default | Optional black-side AI depth override for web/config API (`0` = immediate fallback move selection) |
+| `white_ai_depth` | int | preset default | Optional white-side AI depth override for web/config API (`0` = immediate fallback move selection) |
 | `black_ai_id` | string | `"default"` | Selected AI preset for black |
 | `white_ai_id` | string | `"default"` | Selected AI preset for white |
 | `board_layout` | string | `"standard"` | `standard`, `belgian_daisy`, or `german_daisy` |

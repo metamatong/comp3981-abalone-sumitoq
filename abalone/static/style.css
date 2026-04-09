@@ -576,6 +576,31 @@ svg#board text {
   background-position: right 14px center;
 }
 
+.config-agent-header,
+.config-agent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
+}
+
+.config-agent-header {
+  align-items: end;
+  margin-bottom: 8px;
+}
+
+.config-agent-header .config-label,
+.config-agent-header .config-sublabel {
+  margin-bottom: 0;
+}
+
+.config-agent-row {
+  align-items: center;
+}
+
+.config-depth-input {
+  text-align: center;
+}
+
 .config-select:focus {
   outline: 2px solid #4fc3f7;
   border-color: #4fc3f7;
@@ -686,6 +711,17 @@ svg#board text {
 
 .config-row>div .config-input {
   margin-top: auto;
+}
+
+@media (max-width: 520px) {
+  .config-agent-header,
+  .config-agent-row {
+    grid-template-columns: 1fr;
+  }
+
+  .config-agent-header {
+    gap: 4px;
+  }
 }
 
 .config-primary-btn {

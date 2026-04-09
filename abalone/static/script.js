@@ -34,6 +34,10 @@ function getController(player) {
 function getAgentMeta(agentId) {
     return (state?.available_agents || []).find(agent => agent.id === agentId) || null;
 }
+function getAgentDefaultDepth(agentId) {
+    const meta = getAgentMeta(agentId);
+    return Number(meta?.default_depth ?? 0);
+}
 function getSelectedAgentId(player) {
     return player === BLACK ? state?.black_ai_id : state?.white_ai_id;
 }
@@ -112,6 +116,52 @@ function setConfigValue(id, value) {
     if (!el || value == null) return;
     el.value = String(value);
 }
+function getAgentConfigIds(player) {
+    return player === BLACK
+        ? { selectId: 'cfg-black-ai', depthId: 'cfg-black-ai-depth' }
+        : { selectId: 'cfg-white-ai', depthId: 'cfg-white-ai-depth' };
+}
+function setDepthInputToAgentDefault(player) {
+    const { selectId, depthId } = getAgentConfigIds(player);
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    setConfigValue(depthId, getAgentDefaultDepth(select.value));
+}
+function hydrateDepthInput(player, configuredDepth) {
+    const { selectId, depthId } = getAgentConfigIds(player);
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    const depth = configuredDepth != null ? configuredDepth : getAgentDefaultDepth(select.value);
+    setConfigValue(depthId, depth);
+}
+function parseRequiredNonNegativeIntegerInput(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+
+    el.setCustomValidity('');
+    const raw = el.value.trim();
+    if (raw === '') {
+        el.reportValidity();
+        return null;
+    }
+    if (!/^\d+$/.test(raw)) {
+        el.setCustomValidity('Enter a non-negative integer.');
+        el.reportValidity();
+        return null;
+    }
+    if (!el.checkValidity()) {
+        el.reportValidity();
+        return null;
+    }
+
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < 0) {
+        el.setCustomValidity('Enter a non-negative integer.');
+        el.reportValidity();
+        return null;
+    }
+    return value;
+}
 function populateAgentSelectors(preferredValues = {}) {
     const selects = [
         { id: 'cfg-black-ai', value: preferredValues.black_ai_id ?? state?.black_ai_id },
@@ -141,8 +191,6 @@ function hydrateConfigModalFromState(force = false) {
     if (colorEl) colorEl.checked = true;
 
     setConfigValue('cfg-layout', state.board_layout || 'standard');
-    setConfigValue('cfg-black-ai', state.black_ai_id);
-    setConfigValue('cfg-white-ai', state.white_ai_id);
     setConfigValue('cfg-game-time', Math.floor((state.game_time_ms || 0) / 60000));
     setConfigValue('cfg-max-moves', state.max_moves ?? 500);
     setConfigValue('cfg-p1-move-limit', state.player1_time_per_turn_s ?? 30);
@@ -152,6 +200,8 @@ function hydrateConfigModalFromState(force = false) {
         black_ai_id: state.black_ai_id,
         white_ai_id: state.white_ai_id,
     });
+    hydrateDepthInput(BLACK, state.black_ai_depth);
+    hydrateDepthInput(WHITE, state.white_ai_depth);
     syncConfigSections();
 }
 function syncConfigSections() {
@@ -217,6 +267,10 @@ async function startGame() {
     const board_layout = document.getElementById('cfg-layout').value;
     const black_ai_id = document.getElementById('cfg-black-ai').value;
     const white_ai_id = document.getElementById('cfg-white-ai').value;
+    const black_ai_depth = parseRequiredNonNegativeIntegerInput('cfg-black-ai-depth');
+    if (black_ai_depth == null) return;
+    const white_ai_depth = parseRequiredNonNegativeIntegerInput('cfg-white-ai-depth');
+    if (white_ai_depth == null) return;
     const gameTimeMin = Number(document.getElementById('cfg-game-time').value) || 0;
     const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
     const player1_time_per_turn_s = Number(document.getElementById('cfg-p1-move-limit').value) || 0;
@@ -227,6 +281,8 @@ async function startGame() {
         human_side,
         board_layout,
         ai_depth: null,
+        black_ai_depth,
+        white_ai_depth,
         black_ai_id,
         white_ai_id,
         game_time_ms: gameTimeMin * 60 * 1000,
@@ -235,11 +291,15 @@ async function startGame() {
         player2_time_per_turn_s,
     };
 
-    await fetch('/api/config', {
+    const configResult = await (await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-    });
+    })).json();
+    if (configResult.error) {
+        window.alert(configResult.error);
+        return;
+    }
     await fetch('/api/reset', { method: 'POST' });
     selected = [];
     document.getElementById('game-over').classList.remove('show');
@@ -910,8 +970,18 @@ function showGameOver() {
 
 fetchState();
 openGameConfigModal();
+document.getElementById('cfg-black-ai').addEventListener('change', () => {
+    setDepthInputToAgentDefault(BLACK);
+});
+document.getElementById('cfg-white-ai').addEventListener('change', () => {
+    setDepthInputToAgentDefault(WHITE);
+});
+for (const id of ['cfg-black-ai-depth', 'cfg-white-ai-depth']) {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => { el.setCustomValidity(''); });
+}
 for (const el of document.querySelectorAll(
-    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-black-ai, #cfg-white-ai, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
+    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-black-ai, #cfg-white-ai, #cfg-black-ai-depth, #cfg-white-ai-depth, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
 )) {
     el.addEventListener('change', () => {
         markConfigModalDirty();

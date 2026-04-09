@@ -207,6 +207,8 @@ class GameSession:
                 "mode": self.config.mode,
                 "human_side": self.config.human_side,
                 "ai_depth": self.config.ai_depth,
+                "black_ai_depth": self.config.black_ai_depth,
+                "white_ai_depth": self.config.white_ai_depth,
                 "black_ai_id": self.config.black_ai_id,
                 "white_ai_id": self.config.white_ai_id,
                 "board_layout": self.config.board_layout,
@@ -369,6 +371,9 @@ class GameSession:
 
     def _resolve_ai_depth(self, player: int, agent) -> int:
         """Resolve effective AI depth for one player, honoring evaluation overrides first."""
+        side_override_depth = self.config.black_ai_depth if player == BLACK else self.config.white_ai_depth
+        if side_override_depth is not None:
+            return int(side_override_depth)
         override_depth = self.agent_depth_overrides.get(player)
         if override_depth is not None:
             return int(override_depth)
@@ -553,6 +558,8 @@ class GameSession:
             "mode": self.config.mode,
             "human_side": self.config.human_side,
             "ai_depth": self.config.ai_depth,
+            "black_ai_depth": self.config.black_ai_depth,
+            "white_ai_depth": self.config.white_ai_depth,
             "black_ai_id": self.config.black_ai_id,
             "white_ai_id": self.config.white_ai_id,
             "board_layout": self.config.board_layout,
