@@ -581,6 +581,22 @@ svg#board text {
   border-color: #4fc3f7;
 }
 
+.config-ai-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: end;
+}
+
+.config-depth-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.config-depth-input {
+  text-align: center;
+}
+
 .config-radios {
   display: flex;
   flex-direction: column;

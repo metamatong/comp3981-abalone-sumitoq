@@ -112,6 +112,75 @@ function setConfigValue(id, value) {
     if (!el || value == null) return;
     el.value = String(value);
 }
+function getConfigAgentSelectId(player) {
+    return player === BLACK ? 'cfg-black-ai' : 'cfg-white-ai';
+}
+function getConfigDepthInputId(player) {
+    return player === BLACK ? 'cfg-black-ai-depth' : 'cfg-white-ai-depth';
+}
+function getConfigDepthKey(player) {
+    return player === BLACK ? 'black_ai_depth' : 'white_ai_depth';
+}
+function getConfigAgentKey(player) {
+    return player === BLACK ? 'black_ai_id' : 'white_ai_id';
+}
+function getConfigAgentSelect(player) {
+    return document.getElementById(getConfigAgentSelectId(player));
+}
+function getConfigDepthInput(player) {
+    return document.getElementById(getConfigDepthInputId(player));
+}
+function getCurrentConfigAgentId(player) {
+    return getConfigAgentSelect(player)?.value || getSelectedAgentId(player);
+}
+function parseOptionalWholeNumber(value) {
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (raw === '') return null;
+    if (!/^\d+$/.test(raw)) return null;
+    return Number(raw);
+}
+function sanitizeDepthInputValue(player) {
+    const input = getConfigDepthInput(player);
+    if (!input) return null;
+    const raw = input.value.trim();
+    if (raw === '') {
+        input.dataset.lastValidValue = '';
+        return null;
+    }
+    if (!/^\d+$/.test(raw)) {
+        input.value = input.dataset.lastValidValue || '';
+        return parseOptionalWholeNumber(input.value);
+    }
+    input.dataset.lastValidValue = raw;
+    return Number(raw);
+}
+function setDepthInputValue(player, value, userEdited = false) {
+    const input = getConfigDepthInput(player);
+    if (!input) return;
+    const text = value == null ? '' : String(value);
+    input.value = text;
+    input.dataset.lastValidValue = text;
+    input.dataset.userEdited = userEdited ? 'true' : 'false';
+}
+function getPreferredDepthValue(player, preferredValues = {}) {
+    const sideDepth = preferredValues[getConfigDepthKey(player)] ?? state?.[getConfigDepthKey(player)];
+    if (sideDepth != null) return sideDepth;
+
+    const legacyDepth = preferredValues.ai_depth ?? state?.ai_depth;
+    if (legacyDepth != null) return legacyDepth;
+
+    const agentId = preferredValues[getConfigAgentKey(player)] ?? getCurrentConfigAgentId(player);
+    const agent = getAgentMeta(agentId);
+    return agent?.default_depth ?? null;
+}
+function maybeSeedDepthInput(player, preferredValues = {}, force = false) {
+    const input = getConfigDepthInput(player);
+    if (!input) return;
+    const isUserEdited = input.dataset.userEdited === 'true';
+    if (!force && isUserEdited && input.value !== '') return;
+    setDepthInputValue(player, getPreferredDepthValue(player, preferredValues), false);
+}
 function populateAgentSelectors(preferredValues = {}) {
     const selects = [
         { id: 'cfg-black-ai', value: preferredValues.black_ai_id ?? state?.black_ai_id },
@@ -152,6 +221,16 @@ function hydrateConfigModalFromState(force = false) {
         black_ai_id: state.black_ai_id,
         white_ai_id: state.white_ai_id,
     });
+    maybeSeedDepthInput(BLACK, {
+        ai_depth: state.ai_depth,
+        black_ai_id: state.black_ai_id,
+        black_ai_depth: state.black_ai_depth,
+    }, true);
+    maybeSeedDepthInput(WHITE, {
+        ai_depth: state.ai_depth,
+        white_ai_id: state.white_ai_id,
+        white_ai_depth: state.white_ai_depth,
+    }, true);
     syncConfigSections();
 }
 function syncConfigSections() {
@@ -217,6 +296,8 @@ async function startGame() {
     const board_layout = document.getElementById('cfg-layout').value;
     const black_ai_id = document.getElementById('cfg-black-ai').value;
     const white_ai_id = document.getElementById('cfg-white-ai').value;
+    const black_ai_depth = sanitizeDepthInputValue(BLACK);
+    const white_ai_depth = sanitizeDepthInputValue(WHITE);
     const gameTimeMin = Number(document.getElementById('cfg-game-time').value) || 0;
     const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
     const player1_time_per_turn_s = Number(document.getElementById('cfg-p1-move-limit').value) || 0;
@@ -227,6 +308,8 @@ async function startGame() {
         human_side,
         board_layout,
         ai_depth: null,
+        black_ai_depth,
+        white_ai_depth,
         black_ai_id,
         white_ai_id,
         game_time_ms: gameTimeMin * 60 * 1000,
@@ -911,7 +994,7 @@ function showGameOver() {
 fetchState();
 openGameConfigModal();
 for (const el of document.querySelectorAll(
-    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-black-ai, #cfg-white-ai, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
+    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
 )) {
     el.addEventListener('change', () => {
         markConfigModalDirty();
@@ -919,6 +1002,31 @@ for (const el of document.querySelectorAll(
     });
     el.addEventListener('input', markConfigModalDirty);
     el.addEventListener('focus', markConfigModalDirty);
+}
+for (const player of [BLACK, WHITE]) {
+    const select = getConfigAgentSelect(player);
+    if (select) {
+        select.addEventListener('change', () => {
+            markConfigModalDirty();
+            maybeSeedDepthInput(player);
+            syncConfigSections();
+        });
+        select.addEventListener('focus', markConfigModalDirty);
+    }
+
+    const input = getConfigDepthInput(player);
+    if (!input) continue;
+    input.addEventListener('input', () => {
+        sanitizeDepthInputValue(player);
+        input.dataset.userEdited = 'true';
+        markConfigModalDirty();
+    });
+    input.addEventListener('change', () => {
+        sanitizeDepthInputValue(player);
+        input.dataset.userEdited = 'true';
+        markConfigModalDirty();
+    });
+    input.addEventListener('focus', markConfigModalDirty);
 }
 document.getElementById('how-to-play-modal').addEventListener('click', (e) => {
     if (e.target.id === 'how-to-play-modal') closeHowToPlayModal();

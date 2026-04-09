@@ -119,7 +119,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--depth",
         type=int,
         default=None,
-        help="Optional shared AI search depth override (1-5). Omit to use each preset's default depth.",
+        help="Optional shared AI search depth override (0-10). Omit to use each preset's default depth.",
     )
     parser.add_argument(
         "--black-ai",
@@ -201,8 +201,8 @@ def main(argv: Optional[List[str]] = None):
         )
         return
 
-    if args.depth is not None and (args.depth < 1 or args.depth > 10):
-        parser.error("--depth must be between 1 and 10")
+    if args.depth is not None and (args.depth < 0 or args.depth > 10):
+        parser.error("--depth must be between 0 and 10")
     try:
         get_agent(args.black_ai)
         get_agent(args.white_ai)

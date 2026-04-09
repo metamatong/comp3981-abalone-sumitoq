@@ -498,12 +498,73 @@ def search_best_move(
     """Return best move and diagnostics for `player`."""
     resolved_agent = agent or DEFAULT_AGENT
     resolved_config = resolve_agent_config(resolved_agent, config)
+    if resolved_config.depth == 0:
+        return _search_best_move_depth_zero(board, player, resolved_agent, resolved_config)
     agent_weights = getattr(resolved_agent.evaluator, "weights", None)
     force_path = _FORCE_WEIGHTED_SEARCH_PATH
     use_native = bool(agent_weights) and force_path != "python"
     if use_native:
         return _search_best_move_native(board, player, resolved_agent, resolved_config, agent_weights)
     return _search_best_move_python(board, player, resolved_agent, resolved_config)
+
+
+def _search_best_move_depth_zero(
+    board: Board,
+    player: int,
+    resolved_agent: AgentDefinition,
+    resolved_config,
+) -> SearchResult:
+    """Resolve an explicit depth-0 request without depending on backend search-path quirks."""
+    start = time.perf_counter()
+    legal_moves = _ordered_moves(board, player, generate_legal_moves(board, player))
+    if not legal_moves:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return SearchResult(
+            move=None,
+            score=resolved_agent.evaluator(board, player),
+            nodes=0,
+            elapsed_ms=elapsed_ms,
+            depth=0,
+            completed_depth=0,
+            decision_source="search",
+            timed_out=False,
+            time_budget_ms=resolved_config.time_budget_ms,
+            agent_id=resolved_agent.id,
+            agent_label=resolved_agent.label,
+            analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+            board_token_before=resolved_config.board_token_before,
+        )
+
+    avoid_move = resolved_config.avoid_move
+    avoidance_applied = False
+    if avoid_move is not None and len(legal_moves) > 1:
+        filtered = [move for move in legal_moves if move != avoid_move]
+        if filtered:
+            legal_moves = filtered
+            avoidance_applied = True
+
+    chosen_move = legal_moves[0]
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return SearchResult(
+        move=chosen_move,
+        score=resolved_agent.evaluator(board, player),
+        nodes=0,
+        elapsed_ms=elapsed_ms,
+        depth=0,
+        completed_depth=0,
+        decision_source=_resolve_decision_source(
+            move=chosen_move,
+            completed_depth=0,
+            timed_out=False,
+            avoidance_applied=avoidance_applied,
+        ),
+        timed_out=False,
+        time_budget_ms=resolved_config.time_budget_ms,
+        agent_id=resolved_agent.id,
+        agent_label=resolved_agent.label,
+        analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+        board_token_before=resolved_config.board_token_before,
+    )
 
 
 def _search_best_move_native(
