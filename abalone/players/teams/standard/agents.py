@@ -11,6 +11,6 @@ AGENTS = [
         evaluator=evaluate_standard,
         default_depth=6,
         tie_break="lexicographic",
-        max_depth=9,
+        max_quiescence_depth=9,
     )
 ]
