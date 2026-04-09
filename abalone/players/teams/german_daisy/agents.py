@@ -9,7 +9,7 @@ AGENTS = [
         label="Tournament: German Daisy",
         owner="Tournament",
         evaluator=evaluate_german_daisy,
-        default_depth=6,
+        default_depth=7,
         tie_break="lexicographic",
         max_quiescence_depth=9,
     )
