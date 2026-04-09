@@ -8,7 +8,6 @@ abalone/__pycache__/server.cpython-313.pyc
 /abalone/eval_runs/
 /.venv-native/
 /build/
-/dist/
 *.pyd
 *.so
 *.dylib
