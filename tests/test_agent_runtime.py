@@ -15,11 +15,32 @@ from abalone.game.board import BLACK, WHITE, Board
 from abalone.game.config import GameConfig, MODE_AVA, MODE_HVA
 from abalone.game.match import main as match_main
 from abalone.game.session import GameSession
-from abalone.players.registry import get_agent
+from abalone.players.registry import build_runtime_agent, get_agent, get_agent_weights
 from abalone.state_space import generate_legal_moves
 
 if not native.is_available():
     raise unittest.SkipTest("native extension not built")
+
+
+def _immediate_forced_finish_board() -> Board:
+    return Board.from_compact_token("a3b,a4b,a5w|5-0")
+
+
+def _forced_finish_line_board() -> Board:
+    return Board.from_compact_token("a1w,a2b,b1b,b2b|5-0")
+
+
+def _custom_agent(*, forced_finish_enabled: bool, max_quiescence_depth: int = 0) -> AgentDefinition:
+    return AgentDefinition(
+        id=f"test-forced-{int(forced_finish_enabled)}-{max_quiescence_depth}",
+        label="Forced Finish Test",
+        owner="Test",
+        evaluator=evaluate_board,
+        default_depth=4,
+        tie_break="lexicographic",
+        max_quiescence_depth=max_quiescence_depth,
+        forced_finish_enabled=forced_finish_enabled,
+    )
 
 
 class AgentRuntimeTests(unittest.TestCase):
@@ -105,6 +126,8 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertIn("max_quiescence_depth", default_agent)
         self.assertEqual(default_agent["max_quiescence_depth"], 0)
+        self.assertIn("forced_finish_enabled", default_agent)
+        self.assertFalse(default_agent["forced_finish_enabled"])
 
     def test_session_uses_agent_default_depth_when_global_override_is_unset(self):
         board = Board()
@@ -528,6 +551,94 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(first_score, second_score)
         self.assertGreater(first_stats["nodes"], 1)
         self.assertEqual(second_stats["nodes"], 1)
+
+    def test_forced_finish_override_ignores_avoid_move_for_immediate_win(self):
+        board = _immediate_forced_finish_board()
+        agent = _custom_agent(forced_finish_enabled=True)
+        winning_move = next(
+            move
+            for move in generate_legal_moves(board, BLACK)
+            if _immediate_forced_finish_board().apply_move(move, BLACK)["pushoff"]
+        )
+
+        result = choose_move_with_info(
+            board,
+            BLACK,
+            agent=agent,
+            config=AgentConfig(depth=4, avoid_move=winning_move, is_opening_turn=False),
+        )
+
+        self.assertEqual(result.move.to_notation(), "2:a3a5")
+        self.assertEqual(result.decision_source, "forced_finish")
+        self.assertEqual(result.completed_depth, 0)
+        self.assertFalse(result.timed_out)
+
+    def test_agent_config_can_disable_forced_finish(self):
+        board = _immediate_forced_finish_board()
+        agent = _custom_agent(forced_finish_enabled=True)
+
+        result = choose_move_with_info(
+            board,
+            BLACK,
+            agent=agent,
+            config=AgentConfig(depth=2, is_opening_turn=False, forced_finish_enabled=False),
+        )
+
+        self.assertEqual(result.move.to_notation(), "2:a3a5")
+        self.assertEqual(result.decision_source, "search")
+        self.assertEqual(result.completed_depth, 2)
+
+    def test_enabled_agent_stops_after_proving_forced_finish_line(self):
+        board = _forced_finish_line_board()
+        agent = _custom_agent(forced_finish_enabled=True)
+
+        result = choose_move_with_info(
+            board,
+            BLACK,
+            agent=agent,
+            config=AgentConfig(depth=4, is_opening_turn=False),
+        )
+
+        self.assertEqual(result.move.to_notation(), "2:a2c2")
+        self.assertEqual(result.decision_source, "forced_finish")
+        self.assertEqual(result.completed_depth, 3)
+
+    def test_disabled_agent_does_not_early_stop_for_forced_finish_line(self):
+        board = _forced_finish_line_board()
+        agent = _custom_agent(forced_finish_enabled=False)
+
+        result = choose_move_with_info(
+            board,
+            BLACK,
+            agent=agent,
+            config=AgentConfig(depth=4, is_opening_turn=False),
+        )
+
+        self.assertTrue(board.is_legal_move(result.move, BLACK))
+        self.assertEqual(result.decision_source, "search")
+        self.assertEqual(result.completed_depth, 4)
+
+    def test_native_forced_finish_matches_python_reference(self):
+        board = _forced_finish_line_board()
+        agent = _custom_agent(forced_finish_enabled=True)
+        config = AgentConfig(depth=4, is_opening_turn=False)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+            expected = choose_move_with_info(board, BLACK, agent=agent, config=config)
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            actual = choose_move_with_info(board, BLACK, agent=agent, config=config)
+
+        self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
+        self.assertAlmostEqual(actual.score, expected.score)
+        self.assertEqual(actual.completed_depth, expected.completed_depth)
+        self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_build_runtime_agent_preserves_forced_finish_toggle(self):
+        source = get_agent("kyle")
+        runtime_agent = build_runtime_agent("kyle", get_agent_weights("kyle"))
+
+        self.assertTrue(source.forced_finish_enabled)
+        self.assertEqual(runtime_agent.forced_finish_enabled, source.forced_finish_enabled)
 
     def test_repetition_avoidance_breaks_loop(self):
         session = GameSession(config=GameConfig(mode=MODE_AVA, ai_depth=1), opening_seed=3)

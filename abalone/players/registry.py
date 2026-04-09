@@ -46,6 +46,7 @@ def list_agent_metadata() -> List[dict]:
             "default_depth": agent.default_depth,
             "tie_break": agent.tie_break,
             "max_quiescence_depth": agent.max_quiescence_depth,
+            "forced_finish_enabled": agent.forced_finish_enabled,
         }
         for agent in ALL_AGENTS
     ]
@@ -79,6 +80,7 @@ def build_runtime_agent(agent_id: str, weights: Dict[str, float]) -> AgentDefini
         default_depth=agent.default_depth,
         tie_break=agent.tie_break,
         max_quiescence_depth=agent.max_quiescence_depth,
+        forced_finish_enabled=agent.forced_finish_enabled,
     )
 
 

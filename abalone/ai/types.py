@@ -19,6 +19,7 @@ class AgentDefinition:
     default_depth: int = 5
     tie_break: str = "lexicographic"
     max_quiescence_depth: int = 0
+    forced_finish_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class AgentConfig:
     analysis_evaluator_id: Optional[str] = None
     board_token_before: Optional[str] = None
     remaining_game_moves: Optional[int] = None
+    forced_finish_enabled: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class ResolvedAgentConfig:
     analysis_evaluator_id: Optional[str]
     board_token_before: Optional[str]
     remaining_game_moves: Optional[int]
+    forced_finish_enabled: bool
 
 
 def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] = None) -> ResolvedAgentConfig:
@@ -82,4 +85,9 @@ def resolve_agent_config(agent: AgentDefinition, config: Optional[AgentConfig] =
         analysis_evaluator_id=config.analysis_evaluator_id,
         board_token_before=config.board_token_before,
         remaining_game_moves=remaining_game_moves,
+        forced_finish_enabled=(
+            bool(config.forced_finish_enabled)
+            if config.forced_finish_enabled is not None
+            else bool(agent.forced_finish_enabled)
+        ),
     )

@@ -288,11 +288,13 @@ py_search_weighted(PyObject *self, PyObject *args)
     PyObject *completed_depth_payload;
     PyObject *timed_out_payload;
     PyObject *avoidance_payload;
+    PyObject *forced_finish_payload;
     int has_deadline = 0;
     int time_budget_ms = 0;
     int has_remaining_game_moves = 0;
     int remaining_game_moves = 0;
     int tie_break_lexicographic;
+    int forced_finish_enabled;
     int status;
     int idx;
     const char *tie_break;
@@ -302,7 +304,7 @@ py_search_weighted(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(
             args,
-            "y*iiiOiiOOOOi",
+            "y*iiiOiiOOOOip",
             &cells_buffer,
             &black_score,
             &white_score,
@@ -314,7 +316,8 @@ py_search_weighted(PyObject *self, PyObject *args)
             &remaining_game_moves_obj,
             &tie_break_obj,
             &avoid_move_obj,
-            &root_candidate_limit)) {
+            &root_candidate_limit,
+            &forced_finish_enabled)) {
         return NULL;
     }
     if (cells_buffer.len != CELL_COUNT) {
@@ -380,6 +383,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         tie_break_lexicographic,
         &avoid_move,
         root_candidate_limit,
+        forced_finish_enabled,
         &result
     );
     if (status < 0) {
@@ -399,8 +403,10 @@ py_search_weighted(PyObject *self, PyObject *args)
     completed_depth_payload = PyLong_FromLong(result.completed_depth);
     timed_out_payload = result.timed_out ? Py_True : Py_False;
     avoidance_payload = result.avoidance_applied ? Py_True : Py_False;
+    forced_finish_payload = result.forced_finish_applied ? Py_True : Py_False;
     Py_INCREF(timed_out_payload);
     Py_INCREF(avoidance_payload);
+    Py_INCREF(forced_finish_payload);
     if (move_payload == NULL || candidate_list == NULL || score_payload == NULL ||
             nodes_payload == NULL || completed_depth_payload == NULL) {
         Py_DECREF(payload);
@@ -411,6 +417,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         Py_XDECREF(completed_depth_payload);
         Py_XDECREF(timed_out_payload);
         Py_XDECREF(avoidance_payload);
+        Py_XDECREF(forced_finish_payload);
         return NULL;
     }
 
@@ -431,6 +438,7 @@ py_search_weighted(PyObject *self, PyObject *args)
             PyDict_SetItemString(payload, "completed_depth", completed_depth_payload) < 0 ||
             PyDict_SetItemString(payload, "timed_out", timed_out_payload) < 0 ||
             PyDict_SetItemString(payload, "avoidance_applied", avoidance_payload) < 0 ||
+            PyDict_SetItemString(payload, "forced_finish_applied", forced_finish_payload) < 0 ||
             PyDict_SetItemString(payload, "root_candidates", candidate_list) < 0) {
         Py_DECREF(payload);
         Py_DECREF(move_payload);
@@ -440,6 +448,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         Py_DECREF(completed_depth_payload);
         Py_DECREF(timed_out_payload);
         Py_DECREF(avoidance_payload);
+        Py_DECREF(forced_finish_payload);
         return NULL;
     }
 
@@ -450,6 +459,7 @@ py_search_weighted(PyObject *self, PyObject *args)
     Py_DECREF(completed_depth_payload);
     Py_DECREF(timed_out_payload);
     Py_DECREF(avoidance_payload);
+    Py_DECREF(forced_finish_payload);
     return payload;
 }
 

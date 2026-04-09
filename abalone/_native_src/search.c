@@ -208,6 +208,319 @@ apply_move_native(BoardState *board, const NativeMove *move, int player)
     }
 }
 
+/* Returns whether a root move immediately ends the game with the sixth capture. */
+static int
+find_immediate_forced_finish_native(
+    const BoardState *board,
+    int player,
+    const NativeMove *moves,
+    int count,
+    const double *weights,
+    SearchContext *ctx,
+    NativeMove *out_move,
+    double *out_score,
+    uint64_t *out_scanned_moves
+)
+{
+    int move_index;
+    move_clear(out_move);
+    *out_score = 0.0;
+    *out_scanned_moves = 0;
+
+    for (move_index = 0; move_index < count; ++move_index) {
+        BoardState child = *board;
+        if (deadline_reached(ctx)) {
+            return 1;
+        }
+        *out_scanned_moves += 1;
+        apply_move_native(&child, &moves[move_index], player);
+        if (board_terminal(&child) && child.scores[player] >= 6) {
+            *out_move = moves[move_index];
+            *out_score = evaluate_weighted_native(&child, player, weights);
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/* Returns whether the root player can force a terminal win through tactical extensions. */
+static int
+forced_finish_quiescence_native(
+    const BoardState *board,
+    int to_move,
+    int root_player,
+    int remaining_depth,
+    int remaining_game_moves,
+    SearchContext *ctx,
+    int *out_forced
+)
+{
+    NativeMove legal_moves[MAX_MOVES];
+    NativeMove tactical_moves[MAX_MOVES];
+    NativeMove empty_move;
+    int legal_count;
+    int tactical_count = 0;
+    int move_index;
+    int opponent;
+
+    if (deadline_reached(ctx)) {
+        return 1;
+    }
+    if (board_terminal(board)) {
+        *out_forced = board->scores[root_player] >= 6;
+        return 0;
+    }
+    if (remaining_depth <= 0 || remaining_game_moves == 0) {
+        *out_forced = 0;
+        return 0;
+    }
+
+    legal_count = generate_legal_moves_native(board, to_move, legal_moves);
+    if (legal_count < 0) {
+        return -1;
+    }
+
+    move_clear(&empty_move);
+    order_moves(board, to_move, legal_moves, legal_count, &empty_move, &empty_move);
+    for (move_index = 0; move_index < legal_count; ++move_index) {
+        if (is_quiescence_move_native(board, to_move, &legal_moves[move_index])) {
+            tactical_moves[tactical_count++] = legal_moves[move_index];
+        }
+    }
+    if (tactical_count == 0) {
+        *out_forced = 0;
+        return 0;
+    }
+
+    opponent = to_move == BLACK ? WHITE : BLACK;
+    if (to_move == root_player) {
+        *out_forced = 0;
+        for (move_index = 0; move_index < tactical_count; ++move_index) {
+            BoardState child = *board;
+            int child_forced = 0;
+            int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+            int status;
+
+            apply_move_native(&child, &tactical_moves[move_index], to_move);
+            status = forced_finish_quiescence_native(
+                &child,
+                opponent,
+                root_player,
+                remaining_depth - 1,
+                child_remaining_game_moves,
+                ctx,
+                &child_forced
+            );
+            if (status != 0) {
+                return status;
+            }
+            if (child_forced) {
+                *out_forced = 1;
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    *out_forced = 1;
+    for (move_index = 0; move_index < tactical_count; ++move_index) {
+        BoardState child = *board;
+        int child_forced = 0;
+        int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+        int status;
+
+        apply_move_native(&child, &tactical_moves[move_index], to_move);
+        status = forced_finish_quiescence_native(
+            &child,
+            opponent,
+            root_player,
+            remaining_depth - 1,
+            child_remaining_game_moves,
+            ctx,
+            &child_forced
+        );
+        if (status != 0) {
+            return status;
+        }
+        if (!child_forced) {
+            *out_forced = 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/* Returns whether the root player can force a terminal win within the searched horizon. */
+static int
+forced_finish_search_native(
+    const BoardState *board,
+    int to_move,
+    int root_player,
+    int depth,
+    int remaining_game_moves,
+    int max_quiescence_depth,
+    SearchContext *ctx,
+    int *out_forced
+)
+{
+    NativeMove legal_moves[MAX_MOVES];
+    NativeMove empty_move;
+    int legal_count;
+    int move_index;
+    int opponent;
+
+    if (deadline_reached(ctx)) {
+        return 1;
+    }
+    if (board_terminal(board)) {
+        *out_forced = board->scores[root_player] >= 6;
+        return 0;
+    }
+    if (remaining_game_moves == 0) {
+        *out_forced = 0;
+        return 0;
+    }
+    if (depth == 0) {
+        if (max_quiescence_depth > 0) {
+            return forced_finish_quiescence_native(
+                board,
+                to_move,
+                root_player,
+                max_quiescence_depth,
+                remaining_game_moves,
+                ctx,
+                out_forced
+            );
+        }
+        *out_forced = 0;
+        return 0;
+    }
+
+    legal_count = generate_legal_moves_native(board, to_move, legal_moves);
+    if (legal_count < 0) {
+        return -1;
+    }
+    if (legal_count == 0) {
+        *out_forced = 0;
+        return 0;
+    }
+
+    move_clear(&empty_move);
+    order_moves(board, to_move, legal_moves, legal_count, &empty_move, &empty_move);
+    opponent = to_move == BLACK ? WHITE : BLACK;
+
+    if (to_move == root_player) {
+        *out_forced = 0;
+        for (move_index = 0; move_index < legal_count; ++move_index) {
+            BoardState child = *board;
+            int child_forced = 0;
+            int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+            int status;
+
+            apply_move_native(&child, &legal_moves[move_index], to_move);
+            status = forced_finish_search_native(
+                &child,
+                opponent,
+                root_player,
+                depth - 1,
+                child_remaining_game_moves,
+                max_quiescence_depth,
+                ctx,
+                &child_forced
+            );
+            if (status != 0) {
+                return status;
+            }
+            if (child_forced) {
+                *out_forced = 1;
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    *out_forced = 1;
+    for (move_index = 0; move_index < legal_count; ++move_index) {
+        BoardState child = *board;
+        int child_forced = 0;
+        int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+        int status;
+
+        apply_move_native(&child, &legal_moves[move_index], to_move);
+        status = forced_finish_search_native(
+            &child,
+            opponent,
+            root_player,
+            depth - 1,
+            child_remaining_game_moves,
+            max_quiescence_depth,
+            ctx,
+            &child_forced
+        );
+        if (status != 0) {
+            return status;
+        }
+        if (!child_forced) {
+            *out_forced = 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/* Returns the first ordered root move that guarantees a terminal win. */
+static int
+find_forced_finish_move_native(
+    const BoardState *board,
+    int player,
+    const NativeMove *moves,
+    int count,
+    int depth,
+    int remaining_game_moves,
+    int max_quiescence_depth,
+    SearchContext *ctx,
+    NativeMove *out_move
+)
+{
+    int move_index;
+    int opponent = player == BLACK ? WHITE : BLACK;
+    move_clear(out_move);
+
+    for (move_index = 0; move_index < count; ++move_index) {
+        BoardState child = *board;
+        int child_forced = 0;
+        int child_remaining_game_moves = remaining_game_moves < 0 ? -1 : remaining_game_moves - 1;
+        int status;
+
+        if (deadline_reached(ctx)) {
+            return 1;
+        }
+        apply_move_native(&child, &moves[move_index], player);
+        if (board_terminal(&child) && child.scores[player] >= 6) {
+            *out_move = moves[move_index];
+            return 0;
+        }
+        status = forced_finish_search_native(
+            &child,
+            opponent,
+            player,
+            depth - 1,
+            child_remaining_game_moves,
+            max_quiescence_depth,
+            ctx,
+            &child_forced
+        );
+        if (status != 0) {
+            return status;
+        }
+        if (child_forced) {
+            *out_move = moves[move_index];
+            return 0;
+        }
+    }
+    return 0;
+}
+
 /* Extends tactical leaf positions to reduce horizon effects. */
 static int
 quiescence_native(
@@ -269,7 +582,7 @@ quiescence_native(
     }
 
     stand_pat = evaluate_weighted_native(board, root_player, ctx->weights);
-    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves <= 0) {
+    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves == 0) {
         move_clear(out_move);
         if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
             return -1;
@@ -437,7 +750,7 @@ minimax_native(
     if (deadline_reached(ctx)) {
         return 1;
     }
-    if (remaining_game_moves <= 0) {
+    if (remaining_game_moves == 0) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
         return 0;
@@ -609,20 +922,26 @@ search_weighted_native(
     int tie_break_lexicographic,
     const NativeMove *avoid_move,
     int root_candidate_limit,
+    int forced_finish_enabled,
     SearchResultNative *out_result
 )
 {
     SearchContext ctx;
     NativeMove legal_moves[MAX_MOVES];
+    NativeMove forced_finish_moves[MAX_MOVES];
     int legal_count;
+    int forced_finish_move_count = 0;
     int idx;
     int opponent = player == BLACK ? WHITE : BLACK;
     uint64_t total_nodes = 0;
+    uint64_t forced_finish_scan_nodes = 0;
     NativeMove best_move;
     double best_score = 0.0;
     int completed_depth = 0;
     int timed_out = 0;
     int avoidance_applied = 0;
+    int forced_finish_applied = 0;
+    int forced_finish_context = forced_finish_enabled && board->scores[player] == 5;
     RootCandidate saved_candidates[MAX_MOVES];
     int saved_candidate_count = 0;
     int root_candidate_cap = root_candidate_limit;
@@ -653,12 +972,53 @@ search_weighted_native(
         out_result->completed_depth = 0;
         out_result->timed_out = 0;
         out_result->avoidance_applied = 0;
+        out_result->forced_finish_applied = 0;
         out_result->root_candidate_count = 0;
         tt_free(&ctx.tt);
         return 0;
     }
 
-    if (move_has_value(avoid_move) && legal_count > 1) {
+    if (forced_finish_context) {
+        move_clear(&best_move);
+        memcpy(forced_finish_moves, legal_moves, sizeof(NativeMove) * legal_count);
+        order_moves(board, player, forced_finish_moves, legal_count, &best_move, &best_move);
+        forced_finish_move_count = legal_count;
+
+        NativeMove forced_move;
+        double forced_score = 0.0;
+        uint64_t scanned_moves = 0;
+        int status = find_immediate_forced_finish_native(
+            board,
+            player,
+            forced_finish_moves,
+            forced_finish_move_count,
+            weights,
+            &ctx,
+            &forced_move,
+            &forced_score,
+            &scanned_moves
+        );
+        if (status == 1) {
+            timed_out = 1;
+        } else if (status != 0) {
+            tt_free(&ctx.tt);
+            return -1;
+        } else if (move_has_value(&forced_move)) {
+            out_result->move = forced_move;
+            out_result->score = forced_score;
+            out_result->nodes = scanned_moves;
+            out_result->completed_depth = 0;
+            out_result->timed_out = 0;
+            out_result->avoidance_applied = 0;
+            out_result->forced_finish_applied = 1;
+            out_result->root_candidate_count = 0;
+            tt_free(&ctx.tt);
+            return 0;
+        }
+        forced_finish_scan_nodes += scanned_moves;
+    }
+
+    if (move_has_value(avoid_move) && legal_count > 1 && !forced_finish_context) {
         NativeMove filtered[MAX_MOVES];
         int filtered_count = 0;
         for (idx = 0; idx < legal_count; ++idx) {
@@ -680,7 +1040,9 @@ search_weighted_native(
         NativeMove current_best_move = best_move;
         double current_best_score = -INFINITY;
         RootCandidate depth_candidates[MAX_MOVES];
+        RootCandidate depth_scored_moves[MAX_MOVES];
         int depth_candidate_count = 0;
+        int depth_scored_move_count = 0;
         TTEntry *root_entry;
         NativeMove tt_move;
         NativeMove ordered_root[MAX_MOVES];
@@ -742,6 +1104,12 @@ search_weighted_native(
                 current_best_move = ordered_root[move_index];
             }
 
+            if (depth_scored_move_count < MAX_MOVES) {
+                depth_scored_moves[depth_scored_move_count].move = ordered_root[move_index];
+                depth_scored_moves[depth_scored_move_count].score = child_value;
+                depth_scored_moves[depth_scored_move_count].depth = idx;
+                depth_scored_move_count += 1;
+            }
             if (root_candidate_cap > 0 && depth_candidate_count < MAX_MOVES) {
                 depth_candidates[depth_candidate_count].move = ordered_root[move_index];
                 depth_candidates[depth_candidate_count].score = child_value;
@@ -780,14 +1148,49 @@ search_weighted_native(
         if (saved_candidate_count > 0) {
             memcpy(saved_candidates, depth_candidates, sizeof(RootCandidate) * depth_candidate_count);
         }
+        if (forced_finish_context) {
+            NativeMove forced_move;
+            int status = find_forced_finish_move_native(
+                board,
+                player,
+                forced_finish_moves,
+                forced_finish_move_count,
+                idx,
+                root_remaining_game_moves,
+                max_quiescence_depth,
+                &ctx,
+                &forced_move
+            );
+            if (status == 1) {
+                timed_out = 1;
+                break;
+            }
+            if (status != 0) {
+                tt_free(&ctx.tt);
+                return -1;
+            }
+            if (move_has_value(&forced_move)) {
+                int score_index;
+                best_move = forced_move;
+                forced_finish_applied = 1;
+                for (score_index = 0; score_index < depth_scored_move_count; ++score_index) {
+                    if (move_equal(&depth_scored_moves[score_index].move, &forced_move)) {
+                        best_score = depth_scored_moves[score_index].score;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
     }
 
     out_result->move = best_move;
     out_result->score = best_score;
-    out_result->nodes = total_nodes;
+    out_result->nodes = total_nodes + forced_finish_scan_nodes;
     out_result->completed_depth = completed_depth;
     out_result->timed_out = timed_out;
     out_result->avoidance_applied = avoidance_applied;
+    out_result->forced_finish_applied = forced_finish_applied;
     out_result->root_candidate_count = saved_candidate_count;
     if (saved_candidate_count > 0) {
         memcpy(out_result->root_candidates, saved_candidates, sizeof(RootCandidate) * saved_candidate_count);

@@ -89,8 +89,11 @@ def _resolve_decision_source(
     completed_depth: int,
     timed_out: bool,
     avoidance_applied: bool,
+    forced_finish_applied: bool,
 ) -> str:
     """Map native search metadata onto the public decision-source strings."""
+    if forced_finish_applied:
+        return "forced_finish"
     decision_source = "search"
     if move is None:
         decision_source = "search"
@@ -147,6 +150,243 @@ def _is_push_move(board: Board, player: int, move: Move) -> bool:
 def _is_quiescence_move(board: Board, player: int, move: Move) -> bool:
     """Return whether a legal move is tactical enough to extend beyond the nominal leaf."""
     return _is_push_move(board, player, move)
+
+
+def _move_finishes_game(board: Board, move: Move, player: int) -> bool:
+    """Return whether applying `move` reaches the terminal sixth capture."""
+    undo_info = board.apply_move_undo(move, player)
+    try:
+        return board.score[player] >= 6
+    finally:
+        board.undo_move(undo_info)
+
+
+def _find_immediate_forced_finish(
+    board: Board,
+    player: int,
+    legal_moves: List[Move],
+    evaluator,
+    deadline_at: Optional[float],
+) -> tuple[Optional[Move], Optional[float], int]:
+    """Return the first ordered root move that immediately ends the game."""
+    scanned_moves = 0
+    for move in legal_moves:
+        _check_deadline(deadline_at)
+        scanned_moves += 1
+        undo_info = board.apply_move_undo(move, player)
+        try:
+            if board.score[player] >= 6:
+                return move, evaluator(board, player), scanned_moves
+        finally:
+            board.undo_move(undo_info)
+    return None, None, scanned_moves
+
+
+def _force_win_key(
+    board: Board,
+    to_move: int,
+    mode: int,
+    remaining_depth: int,
+    remaining_game_moves: Optional[int],
+) -> tuple[int, int, int, int, int]:
+    """Build a memoization key for finish-force verification."""
+    remaining_key = -1 if remaining_game_moves is None else int(remaining_game_moves)
+    return board.zhash, to_move, mode, remaining_depth, remaining_key
+
+
+def _forced_finish_quiescence(
+    board: Board,
+    to_move: int,
+    root_player: int,
+    remaining_depth: int,
+    remaining_game_moves: Optional[int],
+    deadline_at: Optional[float],
+    memo: Dict[tuple[int, int, int, int, int], bool],
+) -> bool:
+    """Return whether the root player can force a terminal win via tactical continuations."""
+    _check_deadline(deadline_at)
+    key = _force_win_key(board, to_move, TT_MODE_QUIESCENCE, remaining_depth, remaining_game_moves)
+    if key in memo:
+        return memo[key]
+    if _is_terminal(board):
+        result = board.score[root_player] >= 6
+        memo[key] = result
+        return result
+    if remaining_depth <= 0 or (remaining_game_moves is not None and remaining_game_moves <= 0):
+        memo[key] = False
+        return False
+
+    tactical_moves = [
+        move
+        for move in _ordered_moves(board, to_move, generate_legal_moves(board, to_move))
+        if _is_quiescence_move(board, to_move, move)
+    ]
+    if not tactical_moves:
+        memo[key] = False
+        return False
+
+    opponent = _opponent(to_move)
+    next_remaining_game_moves = None if remaining_game_moves is None else remaining_game_moves - 1
+    if to_move == root_player:
+        for move in tactical_moves:
+            undo_info = board.apply_move_undo(move, to_move)
+            try:
+                if _forced_finish_quiescence(
+                    board,
+                    opponent,
+                    root_player,
+                    remaining_depth - 1,
+                    next_remaining_game_moves,
+                    deadline_at,
+                    memo,
+                ):
+                    memo[key] = True
+                    return True
+            finally:
+                board.undo_move(undo_info)
+        memo[key] = False
+        return False
+
+    for move in tactical_moves:
+        undo_info = board.apply_move_undo(move, to_move)
+        try:
+            if not _forced_finish_quiescence(
+                board,
+                opponent,
+                root_player,
+                remaining_depth - 1,
+                next_remaining_game_moves,
+                deadline_at,
+                memo,
+            ):
+                memo[key] = False
+                return False
+        finally:
+            board.undo_move(undo_info)
+    memo[key] = True
+    return True
+
+
+def _forced_finish_search(
+    board: Board,
+    to_move: int,
+    root_player: int,
+    depth: int,
+    remaining_game_moves: Optional[int],
+    max_quiescence_depth: int,
+    deadline_at: Optional[float],
+    memo: Dict[tuple[int, int, int, int, int], bool],
+) -> bool:
+    """Return whether the root player can force a terminal win within the searched horizon."""
+    _check_deadline(deadline_at)
+    key = _force_win_key(board, to_move, TT_MODE_FULL, depth, remaining_game_moves)
+    if key in memo:
+        return memo[key]
+    if _is_terminal(board):
+        result = board.score[root_player] >= 6
+        memo[key] = result
+        return result
+    if remaining_game_moves is not None and remaining_game_moves <= 0:
+        memo[key] = False
+        return False
+    if depth == 0:
+        if max_quiescence_depth > 0:
+            result = _forced_finish_quiescence(
+                board,
+                to_move,
+                root_player,
+                max_quiescence_depth,
+                remaining_game_moves,
+                deadline_at,
+                memo,
+            )
+            memo[key] = result
+            return result
+        memo[key] = False
+        return False
+
+    legal_moves = _ordered_moves(board, to_move, generate_legal_moves(board, to_move))
+    if not legal_moves:
+        memo[key] = False
+        return False
+
+    opponent = _opponent(to_move)
+    next_remaining_game_moves = None if remaining_game_moves is None else remaining_game_moves - 1
+    if to_move == root_player:
+        for move in legal_moves:
+            undo_info = board.apply_move_undo(move, to_move)
+            try:
+                if _forced_finish_search(
+                    board,
+                    opponent,
+                    root_player,
+                    depth - 1,
+                    next_remaining_game_moves,
+                    max_quiescence_depth,
+                    deadline_at,
+                    memo,
+                ):
+                    memo[key] = True
+                    return True
+            finally:
+                board.undo_move(undo_info)
+        memo[key] = False
+        return False
+
+    for move in legal_moves:
+        undo_info = board.apply_move_undo(move, to_move)
+        try:
+            if not _forced_finish_search(
+                board,
+                opponent,
+                root_player,
+                depth - 1,
+                next_remaining_game_moves,
+                max_quiescence_depth,
+                deadline_at,
+                memo,
+            ):
+                memo[key] = False
+                return False
+        finally:
+            board.undo_move(undo_info)
+    memo[key] = True
+    return True
+
+
+def _find_forced_finish_move(
+    board: Board,
+    player: int,
+    legal_moves: List[Move],
+    depth: int,
+    remaining_game_moves: Optional[int],
+    max_quiescence_depth: int,
+    deadline_at: Optional[float],
+) -> Optional[Move]:
+    """Return the first ordered root move that guarantees the terminal sixth capture."""
+    memo: Dict[tuple[int, int, int, int, int], bool] = {}
+    opponent = _opponent(player)
+    next_remaining_game_moves = None if remaining_game_moves is None else max(0, remaining_game_moves - 1)
+    for move in legal_moves:
+        _check_deadline(deadline_at)
+        undo_info = board.apply_move_undo(move, player)
+        try:
+            if board.score[player] >= 6:
+                return move
+            if _forced_finish_search(
+                board,
+                opponent,
+                player,
+                max(0, depth - 1),
+                next_remaining_game_moves,
+                max_quiescence_depth,
+                deadline_at,
+                memo,
+            ):
+                return move
+        finally:
+            board.undo_move(undo_info)
+    return None
 
 
 def _quiescence(
@@ -527,6 +767,7 @@ def _search_best_move_native(
         tie_break=resolved_config.tie_break,
         avoid_move=resolved_config.avoid_move,
         root_candidate_limit=resolved_config.root_candidate_limit,
+        forced_finish_enabled=resolved_config.forced_finish_enabled,
     )
     elapsed_ms = (time.perf_counter() - native_start) * 1000.0
 
@@ -534,6 +775,7 @@ def _search_best_move_native(
     completed_depth = int(native_result["completed_depth"])
     timed_out = bool(native_result["timed_out"])
     avoidance_applied = bool(native_result.get("avoidance_applied"))
+    forced_finish_applied = bool(native_result.get("forced_finish_applied"))
     return SearchResult(
         move=move,
         score=float(native_result["score"]),
@@ -546,6 +788,7 @@ def _search_best_move_native(
             completed_depth=completed_depth,
             timed_out=timed_out,
             avoidance_applied=avoidance_applied,
+            forced_finish_applied=forced_finish_applied,
         ),
         timed_out=timed_out,
         time_budget_ms=resolved_config.time_budget_ms,
@@ -575,6 +818,7 @@ def _search_best_move_python(
         deadline_at = start + (resolved_config.time_budget_ms / 1000.0)
 
     legal_moves = _ordered_moves(board, player, generate_legal_moves(board, player))
+    forced_finish_context = resolved_config.forced_finish_enabled and board.score[player] == 5
     if not legal_moves:
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return SearchResult(
@@ -593,9 +837,40 @@ def _search_best_move_python(
             board_token_before=resolved_config.board_token_before,
         )
 
+    if forced_finish_context:
+        try:
+            forced_move, forced_score, forced_nodes = _find_immediate_forced_finish(
+                board,
+                player,
+                legal_moves,
+                resolved_agent.evaluator,
+                deadline_at,
+            )
+        except _SearchTimeout:
+            forced_move = None
+            forced_score = None
+            forced_nodes = 0
+        if forced_move is not None and forced_score is not None:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            return SearchResult(
+                move=forced_move,
+                score=forced_score,
+                nodes=forced_nodes,
+                elapsed_ms=elapsed_ms,
+                depth=requested_depth,
+                completed_depth=0,
+                decision_source="forced_finish",
+                timed_out=False,
+                time_budget_ms=resolved_config.time_budget_ms,
+                agent_id=resolved_agent.id,
+                agent_label=resolved_agent.label,
+                analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+                board_token_before=resolved_config.board_token_before,
+            )
+
     avoid_move = resolved_config.avoid_move
     avoidance_applied = False
-    if avoid_move is not None and len(legal_moves) > 1:
+    if avoid_move is not None and len(legal_moves) > 1 and not forced_finish_context:
         filtered = [move for move in legal_moves if move != avoid_move]
         if filtered:
             legal_moves = filtered
@@ -606,6 +881,7 @@ def _search_best_move_python(
     best_score = 0.0
     completed_depth = 0
     timed_out = False
+    forced_finish_applied = False
     root_candidates: List[Dict[str, object]] = []
 
     tt: Dict[tuple[int, int, int], TTEntry] = {}
@@ -623,6 +899,7 @@ def _search_best_move_python(
         current_best_score = -inf
         current_best_move = best_move
         depth_candidates: List[Dict[str, object]] = []
+        depth_scores: Dict[Move, float] = {}
 
         try:
             tt_key = _make_tt_key(board, player, TT_MODE_FULL, remaining_game_moves)
@@ -654,6 +931,7 @@ def _search_best_move_python(
                 finally:
                     board.undo_move(undo_info)
 
+                depth_scores[move] = value
                 if value > current_best_score or (
                     value == current_best_score
                     and _prefer_by_tie_break(resolved_config.tie_break, move, current_best_move)
@@ -681,6 +959,21 @@ def _search_best_move_python(
                     depth_candidates,
                     key=lambda item: (-float(item["score"]), str(item["notation"])),
                 )[: resolved_config.root_candidate_limit]
+            if forced_finish_context:
+                forced_move = _find_forced_finish_move(
+                    board,
+                    player,
+                    legal_moves,
+                    depth,
+                    remaining_game_moves,
+                    resolved_config.max_quiescence_depth,
+                    deadline_at,
+                )
+                if forced_move is not None:
+                    best_move = forced_move
+                    best_score = depth_scores.get(forced_move, current_best_score)
+                    forced_finish_applied = True
+                    break
 
         except _SearchTimeout:
             total_nodes += stats["nodes"]
@@ -712,6 +1005,7 @@ def _search_best_move_python(
             completed_depth=completed_depth,
             timed_out=timed_out,
             avoidance_applied=avoidance_applied,
+            forced_finish_applied=forced_finish_applied,
         ),
         timed_out=timed_out,
         time_budget_ms=resolved_config.time_budget_ms,

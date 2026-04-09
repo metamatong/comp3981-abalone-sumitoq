@@ -126,6 +126,7 @@ def search_weighted(
     tie_break: str,
     avoid_move: Optional[object],
     root_candidate_limit: int,
+    forced_finish_enabled: bool,
 ):
     """Run the native weighted search."""
     native_ext = require_available()
@@ -144,6 +145,7 @@ def search_weighted(
         str(tie_break),
         _encode_move(avoid_move),
         int(root_candidate_limit),
+        bool(forced_finish_enabled),
     )
     result = dict(raw_result)
     result["move"] = _decode_move(result.get("move"))

@@ -11,4 +11,5 @@ DEFAULT_AGENT = AgentDefinition(
     default_depth=2,
     tie_break="lexicographic",
     max_quiescence_depth=0,
+    forced_finish_enabled=False,
 )

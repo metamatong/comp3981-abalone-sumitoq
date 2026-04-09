@@ -99,6 +99,7 @@ typedef struct {
     int completed_depth;
     int timed_out;
     int avoidance_applied;
+    int forced_finish_applied;
     RootCandidate root_candidates[MAX_MOVES];
     int root_candidate_count;
 } SearchResultNative;
@@ -144,6 +145,7 @@ int search_weighted_native(
     int tie_break_lexicographic,
     const NativeMove *avoid_move,
     int root_candidate_limit,
+    int forced_finish_enabled,
     SearchResultNative *out_result
 );
 
