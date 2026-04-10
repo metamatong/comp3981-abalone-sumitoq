@@ -548,7 +548,7 @@ svg#board text {
   font-size: 17px;
   font-weight: 700;
   color: #dce7ef;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .config-sublabel {
@@ -579,6 +579,18 @@ svg#board text {
 .config-select:focus {
   outline: 2px solid #4fc3f7;
   border-color: #4fc3f7;
+}
+
+.config-agent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 8px;
+  align-items: end;
+}
+
+.config-agent-depth {
+  display: flex;
+  flex-direction: column;
 }
 
 .config-radios {
@@ -806,6 +818,12 @@ svg#board text {
     width: 50px;
     height: 50px;
     font-size: 26px;
+  }
+
+  .config-agent-row,
+  .config-row,
+  .config-time-row {
+    grid-template-columns: 1fr;
   }
 }
 

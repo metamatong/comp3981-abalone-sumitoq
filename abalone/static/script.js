@@ -55,6 +55,7 @@ let wasPausedBeforeModal = false;
 let gameOverDismissed = false;
 let lastHistoryKey = '';
 let configModalDirty = false;
+let configDepthAuto = { [BLACK]: true, [WHITE]: true };
 
 function markConfigModalDirty() {
     configModalDirty = true;
@@ -112,6 +113,56 @@ function setConfigValue(id, value) {
     if (!el || value == null) return;
     el.value = String(value);
 }
+function getConfigAgentSelectId(player) {
+    return player === BLACK ? 'cfg-black-ai' : 'cfg-white-ai';
+}
+function getConfigDepthInputId(player) {
+    return player === BLACK ? 'cfg-black-ai-depth' : 'cfg-white-ai-depth';
+}
+function getConfigSelectedAgentId(player) {
+    const el = document.getElementById(getConfigAgentSelectId(player));
+    return el?.value || getSelectedAgentId(player) || '';
+}
+function getConfigDepthInput(player) {
+    return document.getElementById(getConfigDepthInputId(player));
+}
+function getAgentDefaultDepth(agentId) {
+    const meta = getAgentMeta(agentId);
+    const defaultDepth = Number(meta?.default_depth);
+    return Number.isFinite(defaultDepth) && defaultDepth >= 0 ? Math.trunc(defaultDepth) : 0;
+}
+function sanitizeDepthValue(value) {
+    if (value == null) return '';
+    const raw = String(value).trim();
+    if (!raw) return '';
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return '';
+    return String(Math.max(0, Math.trunc(parsed)));
+}
+function setConfigDepthValue(player, value, auto = false) {
+    const input = getConfigDepthInput(player);
+    if (!input) return;
+    input.value = sanitizeDepthValue(value);
+    configDepthAuto[player] = auto;
+}
+function syncDepthInputToAgentDefault(player, force = false) {
+    if (!force && !configDepthAuto[player]) return;
+    setConfigDepthValue(player, getAgentDefaultDepth(getConfigSelectedAgentId(player)), true);
+}
+function normalizeConfigDepthInput(player, markManual = false) {
+    const input = getConfigDepthInput(player);
+    if (!input) return 0;
+
+    const sanitized = sanitizeDepthValue(input.value);
+    if (!sanitized) {
+        syncDepthInputToAgentDefault(player, true);
+        return Number(getConfigDepthInput(player)?.value || 0);
+    }
+
+    input.value = sanitized;
+    if (markManual) configDepthAuto[player] = false;
+    return Number(sanitized);
+}
 function populateAgentSelectors(preferredValues = {}) {
     const selects = [
         { id: 'cfg-black-ai', value: preferredValues.black_ai_id ?? state?.black_ai_id },
@@ -141,8 +192,6 @@ function hydrateConfigModalFromState(force = false) {
     if (colorEl) colorEl.checked = true;
 
     setConfigValue('cfg-layout', state.board_layout || 'standard');
-    setConfigValue('cfg-black-ai', state.black_ai_id);
-    setConfigValue('cfg-white-ai', state.white_ai_id);
     setConfigValue('cfg-game-time', Math.floor((state.game_time_ms || 0) / 60000));
     setConfigValue('cfg-max-moves', state.max_moves ?? 500);
     setConfigValue('cfg-p1-move-limit', state.player1_time_per_turn_s ?? 30);
@@ -152,6 +201,10 @@ function hydrateConfigModalFromState(force = false) {
         black_ai_id: state.black_ai_id,
         white_ai_id: state.white_ai_id,
     });
+    setConfigDepthValue(BLACK, state.black_ai_depth, false);
+    setConfigDepthValue(WHITE, state.white_ai_depth, false);
+    if (state.black_ai_depth == null) syncDepthInputToAgentDefault(BLACK, true);
+    if (state.white_ai_depth == null) syncDepthInputToAgentDefault(WHITE, true);
     syncConfigSections();
 }
 function syncConfigSections() {
@@ -168,6 +221,28 @@ function syncConfigSections() {
     humanColorSection.style.display = mode === 'hva' ? '' : 'none';
     blackAiSection.style.display = mode === 'ava' || (mode === 'hva' && humanSide !== BLACK) ? '' : 'none';
     whiteAiSection.style.display = mode === 'ava' || (mode === 'hva' && humanSide !== WHITE) ? '' : 'none';
+}
+function onConfigAgentChange(player) {
+    syncDepthInputToAgentDefault(player);
+    markConfigModalDirty();
+    syncConfigSections();
+}
+function onConfigDepthInput(player) {
+    const input = getConfigDepthInput(player);
+    if (!input) return;
+
+    if (input.value.trim() === '') {
+        configDepthAuto[player] = true;
+        markConfigModalDirty();
+        return;
+    }
+
+    input.value = sanitizeDepthValue(input.value);
+    configDepthAuto[player] = false;
+    markConfigModalDirty();
+}
+function onConfigDepthBlur(player) {
+    normalizeConfigDepthInput(player);
 }
 function isConfigModalOpen() {
     return document.getElementById('game-config-modal').classList.contains('show');
@@ -217,6 +292,8 @@ async function startGame() {
     const board_layout = document.getElementById('cfg-layout').value;
     const black_ai_id = document.getElementById('cfg-black-ai').value;
     const white_ai_id = document.getElementById('cfg-white-ai').value;
+    const black_ai_depth = normalizeConfigDepthInput(BLACK);
+    const white_ai_depth = normalizeConfigDepthInput(WHITE);
     const gameTimeMin = Number(document.getElementById('cfg-game-time').value) || 0;
     const max_moves = Number(document.getElementById('cfg-max-moves').value) || 0;
     const player1_time_per_turn_s = Number(document.getElementById('cfg-p1-move-limit').value) || 0;
@@ -226,9 +303,10 @@ async function startGame() {
         mode,
         human_side,
         board_layout,
-        ai_depth: null,
         black_ai_id,
+        black_ai_depth,
         white_ai_id,
+        white_ai_depth,
         game_time_ms: gameTimeMin * 60 * 1000,
         max_moves,
         player1_time_per_turn_s,
@@ -911,7 +989,7 @@ function showGameOver() {
 fetchState();
 openGameConfigModal();
 for (const el of document.querySelectorAll(
-    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-black-ai, #cfg-white-ai, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
+    'input[name="cfg-mode"], input[name="cfg-color"], #cfg-layout, #cfg-game-time, #cfg-max-moves, #cfg-p1-move-limit, #cfg-p2-move-limit'
 )) {
     el.addEventListener('change', () => {
         markConfigModalDirty();
@@ -920,6 +998,16 @@ for (const el of document.querySelectorAll(
     el.addEventListener('input', markConfigModalDirty);
     el.addEventListener('focus', markConfigModalDirty);
 }
+document.getElementById('cfg-black-ai').addEventListener('change', () => { onConfigAgentChange(BLACK); });
+document.getElementById('cfg-white-ai').addEventListener('change', () => { onConfigAgentChange(WHITE); });
+document.getElementById('cfg-black-ai').addEventListener('focus', markConfigModalDirty);
+document.getElementById('cfg-white-ai').addEventListener('focus', markConfigModalDirty);
+document.getElementById('cfg-black-ai-depth').addEventListener('input', () => { onConfigDepthInput(BLACK); });
+document.getElementById('cfg-white-ai-depth').addEventListener('input', () => { onConfigDepthInput(WHITE); });
+document.getElementById('cfg-black-ai-depth').addEventListener('blur', () => { onConfigDepthBlur(BLACK); });
+document.getElementById('cfg-white-ai-depth').addEventListener('blur', () => { onConfigDepthBlur(WHITE); });
+document.getElementById('cfg-black-ai-depth').addEventListener('focus', markConfigModalDirty);
+document.getElementById('cfg-white-ai-depth').addEventListener('focus', markConfigModalDirty);
 document.getElementById('how-to-play-modal').addEventListener('click', (e) => {
     if (e.target.id === 'how-to-play-modal') closeHowToPlayModal();
 });

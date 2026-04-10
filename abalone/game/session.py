@@ -73,6 +73,10 @@ class GameSession:
         """Return the configured AI preset ID for a player color."""
         return self.config.black_ai_id if player == BLACK else self.config.white_ai_id
 
+    def configured_ai_depth_for_player(self, player: int) -> Optional[int]:
+        """Return the per-side configured depth for a player color, if any."""
+        return self.config.black_ai_depth if player == BLACK else self.config.white_ai_depth
+
     def _now_us(self) -> int:
         """Return current monotonic time in microseconds."""
         return time.perf_counter_ns() // 1000
@@ -207,6 +211,8 @@ class GameSession:
                 "mode": self.config.mode,
                 "human_side": self.config.human_side,
                 "ai_depth": self.config.ai_depth,
+                "black_ai_depth": self.config.black_ai_depth,
+                "white_ai_depth": self.config.white_ai_depth,
                 "black_ai_id": self.config.black_ai_id,
                 "white_ai_id": self.config.white_ai_id,
                 "board_layout": self.config.board_layout,
@@ -372,6 +378,9 @@ class GameSession:
         override_depth = self.agent_depth_overrides.get(player)
         if override_depth is not None:
             return int(override_depth)
+        side_override_depth = self.configured_ai_depth_for_player(player)
+        if side_override_depth is not None:
+            return int(side_override_depth)
         if self.config.ai_depth is not None:
             return int(self.config.ai_depth)
         return int(agent.default_depth)
@@ -553,6 +562,8 @@ class GameSession:
             "mode": self.config.mode,
             "human_side": self.config.human_side,
             "ai_depth": self.config.ai_depth,
+            "black_ai_depth": self.config.black_ai_depth,
+            "white_ai_depth": self.config.white_ai_depth,
             "black_ai_id": self.config.black_ai_id,
             "white_ai_id": self.config.white_ai_id,
             "board_layout": self.config.board_layout,

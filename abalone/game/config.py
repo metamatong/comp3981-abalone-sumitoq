@@ -24,6 +24,8 @@ class GameConfig:
     mode: str = MODE_HVH
     human_side: int = BLACK
     ai_depth: Optional[int] = None
+    black_ai_depth: Optional[int] = None
+    white_ai_depth: Optional[int] = None
     black_ai_id: str = DEFAULT_BLACK_AI_ID
     white_ai_id: str = DEFAULT_WHITE_AI_ID
     board_layout: str = "standard"
@@ -77,6 +79,8 @@ def normalize_depth(value: object) -> Optional[int]:
         raw = value.strip().lower()
         if raw in {"", "default", "preset", "agent"}:
             return None
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("ai_depth must be an integer.")
     try:
         depth = int(value)
     except (TypeError, ValueError) as exc:
@@ -85,6 +89,23 @@ def normalize_depth(value: object) -> Optional[int]:
     if depth < 1 or depth > 10:
         raise ValueError("ai_depth must be between 1 and 10.")
     return depth
+
+
+def normalize_optional_non_negative_int(value: object, name: str) -> Optional[int]:
+    """Convert an optional value to a non-negative integer with field-specific error text."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{name} must be an integer.")
+    try:
+        v = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if v < 0:
+        raise ValueError(f"{name} must be non-negative.")
+    return v
 
 
 def normalize_ai_id(value: object) -> str:
@@ -121,6 +142,8 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
     mode = current.mode
     human_side = current.human_side
     ai_depth = current.ai_depth
+    black_ai_depth = current.black_ai_depth
+    white_ai_depth = current.white_ai_depth
     black_ai_id = current.black_ai_id
     white_ai_id = current.white_ai_id
     board_layout = current.board_layout
@@ -135,6 +158,10 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
         human_side = normalize_human_side(payload["human_side"])
     if "ai_depth" in payload:
         ai_depth = normalize_depth(payload["ai_depth"])
+    if "black_ai_depth" in payload:
+        black_ai_depth = normalize_optional_non_negative_int(payload["black_ai_depth"], "black_ai_depth")
+    if "white_ai_depth" in payload:
+        white_ai_depth = normalize_optional_non_negative_int(payload["white_ai_depth"], "white_ai_depth")
     if "black_ai_id" in payload:
         black_ai_id = normalize_ai_id(payload["black_ai_id"])
     if "white_ai_id" in payload:
@@ -154,6 +181,8 @@ def merge_config(current: GameConfig, payload: Optional[dict]) -> GameConfig:
         mode=mode,
         human_side=human_side,
         ai_depth=ai_depth,
+        black_ai_depth=black_ai_depth,
+        white_ai_depth=white_ai_depth,
         black_ai_id=black_ai_id,
         white_ai_id=white_ai_id,
         board_layout=board_layout,
