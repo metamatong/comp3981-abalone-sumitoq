@@ -10,6 +10,13 @@ except ImportError:
     _native_ext = None
 
 
+_SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH: Optional[bool] = None
+
+
+class NativeSearchCompatibilityError(RuntimeError):
+    """Raised when the loaded native search binary is older than the Python API."""
+
+
 def is_available() -> bool:
     """Return whether the compiled native extension is importable."""
     return _native_ext is not None
@@ -90,6 +97,44 @@ def _encode_move(move: Optional[object]):
     return marble_indexes, direction_index[move.direction]
 
 
+def _is_legacy_search_weighted_signature_error(exc: TypeError) -> bool:
+    """Return whether `exc` came from an older 12-argument native search binary."""
+    message = str(exc)
+    return "12 arguments" in message and "13 given" in message
+
+
+def _search_weighted_legacy_call(
+    native_ext,
+    board,
+    player: int,
+    ordered_weights: Iterable[float],
+    *,
+    depth: int,
+    max_quiescence_depth: int,
+    time_budget_ms,
+    remaining_game_moves,
+    tie_break: str,
+    avoid_move: Optional[object],
+    root_candidate_limit: int,
+):
+    """Run the pre-forced-finish native search signature for stale extension binaries."""
+    api = _board_api()
+    return native_ext.search_weighted(
+        _encode_board_cells(board),
+        int(board.score[api["BLACK"]]),
+        int(board.score[api["WHITE"]]),
+        int(player),
+        tuple(float(weight) for weight in ordered_weights),
+        int(depth),
+        int(max_quiescence_depth),
+        time_budget_ms,
+        remaining_game_moves,
+        str(tie_break),
+        _encode_move(avoid_move),
+        int(root_candidate_limit),
+    )
+
+
 def generate_legal_moves(board, player: int):
     """Return native-generated legal moves."""
     native_ext = require_available()
@@ -129,24 +174,68 @@ def search_weighted(
     forced_finish_enabled: bool,
 ):
     """Run the native weighted search."""
+    global _SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH
     native_ext = require_available()
     api = _board_api()
+    encoded_weights = tuple(float(weight) for weight in ordered_weights)
 
-    raw_result = native_ext.search_weighted(
-        _encode_board_cells(board),
-        int(board.score[api["BLACK"]]),
-        int(board.score[api["WHITE"]]),
-        int(player),
-        tuple(float(weight) for weight in ordered_weights),
-        int(depth),
-        int(max_quiescence_depth),
-        time_budget_ms,
-        remaining_game_moves,
-        str(tie_break),
-        _encode_move(avoid_move),
-        int(root_candidate_limit),
-        bool(forced_finish_enabled),
-    )
+    if _SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH is False:
+        if forced_finish_enabled:
+            raise NativeSearchCompatibilityError(
+                "Loaded native search extension does not support forced_finish_enabled."
+            )
+        raw_result = _search_weighted_legacy_call(
+            native_ext,
+            board,
+            player,
+            encoded_weights,
+            depth=depth,
+            max_quiescence_depth=max_quiescence_depth,
+            time_budget_ms=time_budget_ms,
+            remaining_game_moves=remaining_game_moves,
+            tie_break=tie_break,
+            avoid_move=avoid_move,
+            root_candidate_limit=root_candidate_limit,
+        )
+    else:
+        try:
+            raw_result = native_ext.search_weighted(
+                _encode_board_cells(board),
+                int(board.score[api["BLACK"]]),
+                int(board.score[api["WHITE"]]),
+                int(player),
+                encoded_weights,
+                int(depth),
+                int(max_quiescence_depth),
+                time_budget_ms,
+                remaining_game_moves,
+                str(tie_break),
+                _encode_move(avoid_move),
+                int(root_candidate_limit),
+                bool(forced_finish_enabled),
+            )
+            _SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH = True
+        except TypeError as exc:
+            if not _is_legacy_search_weighted_signature_error(exc):
+                raise
+            _SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH = False
+            if forced_finish_enabled:
+                raise NativeSearchCompatibilityError(
+                    "Loaded native search extension does not support forced_finish_enabled."
+                ) from exc
+            raw_result = _search_weighted_legacy_call(
+                native_ext,
+                board,
+                player,
+                encoded_weights,
+                depth=depth,
+                max_quiescence_depth=max_quiescence_depth,
+                time_budget_ms=time_budget_ms,
+                remaining_game_moves=remaining_game_moves,
+                tie_break=tie_break,
+                avoid_move=avoid_move,
+                root_candidate_limit=root_candidate_limit,
+            )
     result = dict(raw_result)
     result["move"] = _decode_move(result.get("move"))
     raw_candidates = result.get("root_candidates") or []

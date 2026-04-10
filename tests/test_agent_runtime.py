@@ -8,7 +8,7 @@ from unittest import mock
 
 from abalone import native
 from abalone.ai.agent import choose_move, choose_move_with_info
-from abalone.ai.heuristics import evaluate_board
+from abalone.ai.heuristics import FEATURE_ORDER, evaluate_board
 from abalone.ai.minimax import TT_MODE_QUIESCENCE, _make_tt_key, _quiescence, SearchResult
 from abalone.ai.types import AgentConfig, AgentDefinition
 from abalone.game.board import BLACK, WHITE, Board
@@ -718,6 +718,65 @@ class AgentRuntimeTests(unittest.TestCase):
             expected = choose_move_with_info(board, BLACK, agent=agent, config=config)
         with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
             actual = choose_move_with_info(board, BLACK, agent=agent, config=config)
+
+        self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
+        self.assertAlmostEqual(actual.score, expected.score)
+        self.assertEqual(actual.completed_depth, expected.completed_depth)
+        self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_native_wrapper_retries_legacy_signature_when_forced_finish_is_disabled(self):
+        board = Board()
+        board.setup_standard()
+
+        def fake_search_weighted(*args):
+            if len(args) == 13:
+                raise TypeError("function takes exactly 12 arguments (13 given)")
+            return {
+                "move": None,
+                "score": 1.25,
+                "nodes": 7,
+                "completed_depth": 2,
+                "timed_out": False,
+                "avoidance_applied": False,
+                "root_candidates": [],
+            }
+
+        with mock.patch.object(native, "_SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH", None):
+            with mock.patch.object(native._native_ext, "search_weighted", side_effect=fake_search_weighted):
+                result = native.search_weighted(
+                    board,
+                    BLACK,
+                    tuple(0.0 for _ in FEATURE_ORDER),
+                    depth=2,
+                    max_quiescence_depth=0,
+                    time_budget_ms=None,
+                    remaining_game_moves=None,
+                    tie_break="lexicographic",
+                    avoid_move=None,
+                    root_candidate_limit=0,
+                    forced_finish_enabled=False,
+                )
+
+                self.assertFalse(native._SEARCH_WEIGHTED_SUPPORTS_FORCED_FINISH)
+
+        self.assertIsNone(result["move"])
+        self.assertEqual(result["score"], 1.25)
+        self.assertEqual(result["completed_depth"], 2)
+
+    def test_native_forced_finish_falls_back_to_python_when_binary_is_stale(self):
+        board = _forced_finish_line_board()
+        agent = _custom_agent(forced_finish_enabled=True)
+        config = AgentConfig(depth=4, is_opening_turn=False)
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+            expected = choose_move_with_info(board, BLACK, agent=agent, config=config)
+
+        with mock.patch(
+            "abalone.ai.minimax.native_search_weighted",
+            side_effect=native.NativeSearchCompatibilityError("stale binary"),
+        ):
+            with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+                actual = choose_move_with_info(board, BLACK, agent=agent, config=config)
 
         self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
         self.assertAlmostEqual(actual.score, expected.score)

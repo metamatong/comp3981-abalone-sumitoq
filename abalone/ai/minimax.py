@@ -6,7 +6,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from ..game.board import BLACK, WHITE, Board, DIRECTION_INDEX, Move, NEIGHBOR_TABLE, ZOBRIST
-from ..native import search_weighted as native_search_weighted
+from ..native import NativeSearchCompatibilityError, search_weighted as native_search_weighted
 from ..state_space import generate_legal_moves
 from .defaults import DEFAULT_AGENT
 from .heuristics import FEATURE_ORDER
@@ -756,19 +756,22 @@ def _search_best_move_native(
     """Run the native search path for weighted evaluators."""
     ordered_weights = tuple(float(agent_weights[key]) for key in FEATURE_ORDER)
     native_start = time.perf_counter()
-    native_result = native_search_weighted(
-        board,
-        player,
-        ordered_weights,
-        depth=resolved_config.depth,
-        max_quiescence_depth=resolved_config.max_quiescence_depth,
-        time_budget_ms=resolved_config.time_budget_ms,
-        remaining_game_moves=resolved_config.remaining_game_moves,
-        tie_break=resolved_config.tie_break,
-        avoid_move=resolved_config.avoid_move,
-        root_candidate_limit=resolved_config.root_candidate_limit,
-        forced_finish_enabled=resolved_config.forced_finish_enabled,
-    )
+    try:
+        native_result = native_search_weighted(
+            board,
+            player,
+            ordered_weights,
+            depth=resolved_config.depth,
+            max_quiescence_depth=resolved_config.max_quiescence_depth,
+            time_budget_ms=resolved_config.time_budget_ms,
+            remaining_game_moves=resolved_config.remaining_game_moves,
+            tie_break=resolved_config.tie_break,
+            avoid_move=resolved_config.avoid_move,
+            root_candidate_limit=resolved_config.root_candidate_limit,
+            forced_finish_enabled=resolved_config.forced_finish_enabled,
+        )
+    except NativeSearchCompatibilityError:
+        return _search_best_move_python(board, player, resolved_agent, resolved_config)
     elapsed_ms = (time.perf_counter() - native_start) * 1000.0
 
     move = native_result["move"]
