@@ -12,6 +12,6 @@ AGENTS = [
         default_depth=6,
         tie_break="lexicographic",
         max_quiescence_depth=9,
-        forced_finish_enabled=True,
+        forced_finish_enabled=False,
     )
 ]

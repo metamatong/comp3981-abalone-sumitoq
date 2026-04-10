@@ -11,6 +11,6 @@ AGENTS = [
         evaluator=evaluate_cole,
         default_depth=6,
         tie_break="lexicographic",
-        forced_finish_enabled=True,
+        forced_finish_enabled=False,
     )
 ]
