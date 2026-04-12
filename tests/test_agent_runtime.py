@@ -1,7 +1,9 @@
 from math import inf
 import contextlib
 import io
+import os
 import re
+import threading
 import time
 import unittest
 from unittest import mock
@@ -590,6 +592,103 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(actual.score, expected.score)
         self.assertEqual(actual.completed_depth, expected.completed_depth)
         self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_native_root_worker_default_uses_twelve_when_env_unset(self):
+        native_ext = native.require_available()
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ABALONE_NATIVE_ROOT_THREADS", None)
+            self.assertEqual(native_ext._resolve_root_worker_count(20, 32), 12)
+
+    def test_native_root_worker_env_override_takes_precedence(self):
+        native_ext = native.require_available()
+
+        with mock.patch.dict(os.environ, {"ABALONE_NATIVE_ROOT_THREADS": "7"}, clear=False):
+            self.assertEqual(native_ext._resolve_root_worker_count(20, 32), 7)
+
+    def test_native_root_worker_count_clamps_to_available_root_moves(self):
+        native_ext = native.require_available()
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ABALONE_NATIVE_ROOT_THREADS", None)
+            self.assertEqual(native_ext._resolve_root_worker_count(5, 32), 4)
+
+    def test_threaded_native_search_matches_python_reference(self):
+        fixtures = [
+            ("standard", BLACK, "default", 2),
+            ("german_daisy", BLACK, "jonah", 2),
+            ("belgian_daisy", WHITE, "kyle", 2),
+        ]
+
+        for layout, player, agent_id, depth in fixtures:
+            board = Board()
+            board.setup_layout(layout)
+            agent = get_agent(agent_id)
+            config = AgentConfig(depth=depth, is_opening_turn=False)
+
+            with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "python"):
+                expected = choose_move_with_info(board, player, agent=agent, config=config)
+            with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+                actual = choose_move_with_info(board, player, agent=agent, config=config)
+
+            self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
+            self.assertAlmostEqual(actual.score, expected.score)
+            self.assertEqual(actual.completed_depth, expected.completed_depth)
+            self.assertEqual(actual.decision_source, expected.decision_source)
+
+    def test_native_search_completes_from_multiple_python_threads(self):
+        board_token = (
+            "a1b,a2b,a3b,a5b,b1b,b2b,b3b,b4b,b5b,b6b,c3b,d4b,d5b,e5b,"
+            "f5w,g4w,g5w,g7w,h4w,h5w,h6w,h7w,h8w,h9w,i5w,i7w,i8w,i9w|0-0"
+        )
+        start_gate = threading.Event()
+        moves = []
+        errors = []
+
+        def worker():
+            board = Board.from_compact_token(board_token)
+            try:
+                start_gate.wait()
+                result = choose_move_with_info(
+                    board,
+                    WHITE,
+                    agent=get_agent("default"),
+                    config=AgentConfig(depth=2, is_opening_turn=False),
+                )
+                moves.append(result.move.to_notation())
+            except Exception as exc:  # pragma: no cover - surfaced by assertion below
+                errors.append(str(exc))
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            threads = [threading.Thread(target=worker) for _ in range(3)]
+            for thread in threads:
+                thread.start()
+            start_gate.set()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(moves), 3)
+        self.assertEqual(len(set(moves)), 1)
+
+    def test_native_search_timeout_still_returns_legal_move(self):
+        board = Board.from_compact_token(
+            "a2b,a3b,a4b,a5b,b1b,b2b,b4b,b5b,b6b,c3b,c4b,c6b,d3b,d4b,"
+            "e3w,e5w,f3w,g9w,h4w,h5w,h6w,h7w,h8w,i5w,i6w,i7w,i8w,i9w|0-0"
+        )
+
+        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+            result = choose_move_with_info(
+                board,
+                WHITE,
+                agent=get_agent("default"),
+                config=AgentConfig(depth=4, is_opening_turn=False, time_budget_ms=1),
+            )
+
+        self.assertIsNotNone(result.move)
+        self.assertTrue(board.is_legal_move(result.move, WHITE))
+        self.assertGreaterEqual(result.completed_depth, 0)
+        self.assertGreaterEqual(result.elapsed_ms, 0.0)
 
     def test_native_quiescence_does_not_run_when_no_game_moves_remain(self):
         board = Board.from_compact_token(

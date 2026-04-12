@@ -367,6 +367,7 @@ py_search_weighted(PyObject *self, PyObject *args)
     tie_break_lexicographic = strcmp(tie_break, "lexicographic") == 0;
 
     memset(&result, 0, sizeof(result));
+    Py_BEGIN_ALLOW_THREADS
     status = search_weighted_native(
         &board,
         player,
@@ -382,6 +383,7 @@ py_search_weighted(PyObject *self, PyObject *args)
         root_candidate_limit,
         &result
     );
+    Py_END_ALLOW_THREADS
     if (status < 0) {
         PyErr_SetString(PyExc_RuntimeError, "native weighted search failed");
         return NULL;
@@ -453,10 +455,25 @@ py_search_weighted(PyObject *self, PyObject *args)
     return payload;
 }
 
+/* Python test hook for the native root-worker resolution policy. */
+static PyObject *
+py_resolve_root_worker_count(PyObject *self, PyObject *args)
+{
+    int legal_count;
+    unsigned int cpu_count;
+
+    (void) self;
+    if (!PyArg_ParseTuple(args, "iI", &legal_count, &cpu_count)) {
+        return NULL;
+    }
+    return PyLong_FromLong(debug_resolve_root_worker_count(legal_count, cpu_count));
+}
+
 static PyMethodDef module_methods[] = {
     {"generate_legal_moves", py_generate_legal_moves, METH_VARARGS, "Generate legal moves from a compact board payload."},
     {"evaluate_weighted", py_evaluate_weighted, METH_VARARGS, "Evaluate a board using shared heuristic weights."},
     {"search_weighted", py_search_weighted, METH_VARARGS, "Run the native weighted minimax search."},
+    {"_resolve_root_worker_count", py_resolve_root_worker_count, METH_VARARGS, "Internal helper for root worker-count tests."},
     {NULL, NULL, 0, NULL},
 };
 

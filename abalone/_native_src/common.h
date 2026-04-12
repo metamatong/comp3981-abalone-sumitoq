@@ -89,6 +89,7 @@ typedef struct {
     int tie_break_lexicographic;
     double deadline_at;
     TTTable tt;
+    const TTTable *tt_seed;
     NativeMove killer_moves[64];
 } SearchContext;
 
@@ -146,6 +147,7 @@ int search_weighted_native(
     int root_candidate_limit,
     SearchResultNative *out_result
 );
+int debug_resolve_root_worker_count(int legal_count, unsigned int cpu_count);
 
 /* Returns the bit mask for a single board index. */
 static inline uint64_t
