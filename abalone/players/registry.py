@@ -15,7 +15,7 @@ from .teams.standard import AGENTS as STANDARD_AGENTS
 
 ALL_AGENTS: List[AgentDefinition] = [
     # Comment out any you dont want to use when testing in terminal
-    DEFAULT_AGENT,
+    # DEFAULT_AGENT,
     *KYLE_AGENTS,
     *ABDULLAH_AGENTS,
     *COLE_AGENTS,
