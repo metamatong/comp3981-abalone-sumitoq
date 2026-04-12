@@ -62,7 +62,7 @@ struct RootSearchThreadPool {
     int depth_after_move;
     int max_quiescence_depth;
     int root_remaining_game_moves;
-    double alpha;
+    uint64_t alpha_bits;
     double deadline_at;
     const double *weights;
     int tie_break_lexicographic;
@@ -219,9 +219,117 @@ resolve_root_worker_count_with_cpu_count(int legal_count, unsigned int cpu_count
     if (configured_workers > 0) {
         max_workers = configured_workers;
     } else {
-        max_workers = 12;
+        max_workers = (int) cpu_count - 1;
+        if (max_workers > 4) {
+            max_workers = 4;
+        } else if (max_workers < 0) {
+            max_workers = 0;
+        }
     }
     return remaining_root_moves < max_workers ? remaining_root_moves : max_workers;
+}
+
+/* Reinterprets a double as its raw uint64 bit pattern. */
+static uint64_t
+double_to_bits(double value)
+{
+    union {
+        double as_double;
+        uint64_t as_bits;
+    } converter;
+
+    converter.as_double = value;
+    return converter.as_bits;
+}
+
+/* Reinterprets a uint64 bit pattern as a double. */
+static double
+bits_to_double(uint64_t value)
+{
+    union {
+        double as_double;
+        uint64_t as_bits;
+    } converter;
+
+    converter.as_bits = value;
+    return converter.as_double;
+}
+
+/* Atomically reads the shared root alpha published by the main thread. */
+static double
+root_alpha_load(const uint64_t *bits)
+{
+    if (bits == NULL) {
+        return -INFINITY;
+    }
+#ifdef _WIN32
+    return bits_to_double((uint64_t) InterlockedCompareExchange64((volatile LONG64 *) bits, 0, 0));
+#else
+    return bits_to_double(__atomic_load_n(bits, __ATOMIC_ACQUIRE));
+#endif
+}
+
+/* Atomically stores the shared root alpha for a fresh iterative-deepening pass. */
+static void
+root_alpha_store(uint64_t *bits, double alpha)
+{
+#ifdef _WIN32
+    InterlockedExchange64((volatile LONG64 *) bits, (LONG64) double_to_bits(alpha));
+#else
+    __atomic_store_n(bits, double_to_bits(alpha), __ATOMIC_RELEASE);
+#endif
+}
+
+/* Atomically raises the shared root alpha when the main thread improves the root best score. */
+static void
+root_alpha_raise(uint64_t *bits, double alpha)
+{
+    uint64_t desired = double_to_bits(alpha);
+
+    if (bits == NULL) {
+        return;
+    }
+
+#ifdef _WIN32
+    for (;;) {
+        LONG64 observed = InterlockedCompareExchange64((volatile LONG64 *) bits, 0, 0);
+        if (bits_to_double((uint64_t) observed) >= alpha) {
+            return;
+        }
+        if (InterlockedCompareExchange64((volatile LONG64 *) bits, (LONG64) desired, observed) == observed) {
+            return;
+        }
+    }
+#else
+    for (;;) {
+        uint64_t observed = __atomic_load_n(bits, __ATOMIC_ACQUIRE);
+        if (bits_to_double(observed) >= alpha) {
+            return;
+        }
+        if (__atomic_compare_exchange_n(
+                bits,
+                &observed,
+                desired,
+                0,
+                __ATOMIC_ACQ_REL,
+                __ATOMIC_ACQUIRE)) {
+            return;
+        }
+    }
+#endif
+}
+
+/* Syncs the current search alpha with the shared root alpha used by worker threads. */
+static void
+sync_root_alpha(SearchContext *ctx, double *alpha)
+{
+    double shared_alpha = root_alpha_load(ctx->shared_root_alpha_bits);
+    if (shared_alpha > ctx->root_alpha_floor) {
+        ctx->root_alpha_floor = shared_alpha;
+    }
+    if (shared_alpha > *alpha) {
+        *alpha = shared_alpha;
+    }
 }
 
 /* Caps root-search worker count to available hardware and remaining root moves. */
@@ -502,11 +610,12 @@ quiescence_native(
     SearchContext *ctx,
     uint64_t *nodes,
     double *out_value,
-    NativeMove *out_move
+    NativeMove *out_move,
+    uint8_t *out_flag
 )
 {
-    double initial_alpha = alpha;
-    double initial_beta = beta;
+    double initial_alpha;
+    double initial_beta;
     uint64_t key;
     const TTEntry *entry;
     NativeMove tt_move;
@@ -514,6 +623,7 @@ quiescence_native(
     double stand_pat;
     int maximizing;
     double best_value;
+    uint8_t flag;
     NativeMove legal_moves[MAX_MOVES];
     NativeMove tactical_moves[MAX_MOVES];
     int legal_count;
@@ -524,6 +634,9 @@ quiescence_native(
     if (deadline_reached(ctx)) {
         return 1;
     }
+    sync_root_alpha(ctx, &alpha);
+    initial_alpha = alpha;
+    initial_beta = beta;
     *nodes += 1;
 
     key = tt_key_for_state(board, to_move, TT_MODE_QUIESCENCE, remaining_game_moves);
@@ -532,6 +645,9 @@ quiescence_native(
         if (entry->flag == EXACT) {
             *out_value = entry->value;
             *out_move = entry->move;
+            if (out_flag != NULL) {
+                *out_flag = EXACT;
+            }
             return 0;
         }
         if (entry->flag == LOWERBOUND && entry->value > alpha) {
@@ -542,6 +658,9 @@ quiescence_native(
         if (alpha >= beta) {
             *out_value = entry->value;
             *out_move = entry->move;
+            if (out_flag != NULL) {
+                *out_flag = entry->flag;
+            }
             return 0;
         }
         tt_move = entry->move;
@@ -556,6 +675,9 @@ quiescence_native(
             return -1;
         }
         *out_value = stand_pat;
+        if (out_flag != NULL) {
+            *out_flag = EXACT;
+        }
         return 0;
     }
 
@@ -567,6 +689,9 @@ quiescence_native(
                 return -1;
             }
             *out_value = stand_pat;
+            if (out_flag != NULL) {
+                *out_flag = LOWERBOUND;
+            }
             return 0;
         }
         if (stand_pat > alpha) {
@@ -580,6 +705,9 @@ quiescence_native(
                 return -1;
             }
             *out_value = stand_pat;
+            if (out_flag != NULL) {
+                *out_flag = UPPERBOUND;
+            }
             return 0;
         }
         if (stand_pat < beta) {
@@ -603,6 +731,9 @@ quiescence_native(
             return -1;
         }
         *out_value = stand_pat;
+        if (out_flag != NULL) {
+            *out_flag = EXACT;
+        }
         return 0;
     }
 
@@ -614,11 +745,16 @@ quiescence_native(
         BoardState child = *board;
         double child_value = 0.0;
         NativeMove ignored;
+        uint8_t child_flag = EXACT;
         int child_remaining_game_moves = next_remaining_game_moves(remaining_game_moves);
         int status;
 
         if (deadline_reached(ctx)) {
             return 1;
+        }
+        sync_root_alpha(ctx, &alpha);
+        if (move_index > 0 && beta <= alpha) {
+            break;
         }
 
         apply_move_native(&child, &tactical_moves[move_index], to_move);
@@ -633,7 +769,8 @@ quiescence_native(
             ctx,
             nodes,
             &child_value,
-            &ignored
+            &ignored,
+            &child_flag
         );
         if (status != 0) {
             return status;
@@ -668,20 +805,24 @@ quiescence_native(
         }
     }
 
-    {
-        uint8_t flag = EXACT;
-        if (best_value <= initial_alpha) {
-            flag = UPPERBOUND;
-        } else if (best_value >= initial_beta) {
-            flag = LOWERBOUND;
-        }
-        if (!tt_store(&ctx->tt, key, remaining_depth, best_value, flag, &best_move)) {
-            return -1;
-        }
+    flag = EXACT;
+    if (ctx->root_alpha_floor > initial_alpha) {
+        initial_alpha = ctx->root_alpha_floor;
+    }
+    if (best_value <= initial_alpha) {
+        flag = UPPERBOUND;
+    } else if (best_value >= initial_beta) {
+        flag = LOWERBOUND;
+    }
+    if (!tt_store(&ctx->tt, key, remaining_depth, best_value, flag, &best_move)) {
+        return -1;
     }
 
     *out_value = best_value;
     *out_move = best_move;
+    if (out_flag != NULL) {
+        *out_flag = flag;
+    }
     return 0;
 }
 
@@ -699,11 +840,12 @@ minimax_native(
     SearchContext *ctx,
     uint64_t *nodes,
     double *out_value,
-    NativeMove *out_move
+    NativeMove *out_move,
+    uint8_t *out_flag
 )
 {
-    double initial_alpha = alpha;
-    double initial_beta = beta;
+    double initial_alpha;
+    double initial_beta;
     uint64_t key;
     const TTEntry *entry;
     NativeMove tt_move;
@@ -714,13 +856,20 @@ minimax_native(
     int maximizing;
     int opponent;
     double best_value;
+    uint8_t flag;
 
     if (deadline_reached(ctx)) {
         return 1;
     }
+    sync_root_alpha(ctx, &alpha);
+    initial_alpha = alpha;
+    initial_beta = beta;
     if (remaining_game_moves == 0) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
+        if (out_flag != NULL) {
+            *out_flag = EXACT;
+        }
         return 0;
     }
     if (depth == 0 && !board_terminal(board) && max_quiescence_depth > 0) {
@@ -735,7 +884,8 @@ minimax_native(
             ctx,
             nodes,
             out_value,
-            out_move
+            out_move,
+            out_flag
         );
     }
     *nodes += 1;
@@ -746,6 +896,9 @@ minimax_native(
         if (entry->flag == EXACT) {
             *out_value = entry->value;
             *out_move = entry->move;
+            if (out_flag != NULL) {
+                *out_flag = EXACT;
+            }
             return 0;
         }
         if (entry->flag == LOWERBOUND && entry->value > alpha) {
@@ -756,6 +909,9 @@ minimax_native(
         if (alpha >= beta) {
             *out_value = entry->value;
             *out_move = entry->move;
+            if (out_flag != NULL) {
+                *out_flag = entry->flag;
+            }
             return 0;
         }
         tt_move = entry->move;
@@ -766,6 +922,9 @@ minimax_native(
     if (depth == 0 || board_terminal(board)) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
+        if (out_flag != NULL) {
+            *out_flag = EXACT;
+        }
         return 0;
     }
 
@@ -776,6 +935,9 @@ minimax_native(
     if (legal_count == 0) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
+        if (out_flag != NULL) {
+            *out_flag = EXACT;
+        }
         return 0;
     }
 
@@ -797,11 +959,16 @@ minimax_native(
         BoardState child = *board;
         double child_value;
         NativeMove child_best_reply;
+        uint8_t child_flag = EXACT;
         int child_remaining_game_moves = next_remaining_game_moves(remaining_game_moves);
         int status;
 
         if (deadline_reached(ctx)) {
             return 1;
+        }
+        sync_root_alpha(ctx, &alpha);
+        if (move_index > 0 && beta <= alpha) {
+            break;
         }
 
         apply_move_native(&child, &legal_moves[move_index], to_move);
@@ -817,7 +984,8 @@ minimax_native(
             ctx,
             nodes,
             &child_value,
-            &child_best_reply
+            &child_best_reply,
+            &child_flag
         );
         if (status != 0) {
             return status;
@@ -858,20 +1026,24 @@ minimax_native(
         }
     }
 
-    {
-        uint8_t flag = EXACT;
-        if (best_value <= initial_alpha) {
-            flag = UPPERBOUND;
-        } else if (best_value >= initial_beta) {
-            flag = LOWERBOUND;
-        }
-        if (!tt_store(&ctx->tt, key, depth, best_value, flag, &best_move)) {
-            return -1;
-        }
+    flag = EXACT;
+    if (ctx->root_alpha_floor > initial_alpha) {
+        initial_alpha = ctx->root_alpha_floor;
+    }
+    if (best_value <= initial_alpha) {
+        flag = UPPERBOUND;
+    } else if (best_value >= initial_beta) {
+        flag = LOWERBOUND;
+    }
+    if (!tt_store(&ctx->tt, key, depth, best_value, flag, &best_move)) {
+        return -1;
     }
 
     *out_value = best_value;
     *out_move = best_move;
+    if (out_flag != NULL) {
+        *out_flag = flag;
+    }
     return 0;
 }
 
@@ -889,6 +1061,8 @@ init_search_context(
     ctx->tie_break_lexicographic = tie_break_lexicographic;
     ctx->deadline_at = deadline_at;
     ctx->tt_seed = NULL;
+    ctx->shared_root_alpha_bits = NULL;
+    ctx->root_alpha_floor = -INFINITY;
 }
 
 /* Evaluates one ordered root move using the existing recursive search logic. */
@@ -905,12 +1079,15 @@ evaluate_root_move(
     double beta,
     SearchContext *ctx,
     uint64_t *nodes,
-    double *out_value
+    double *out_value,
+    int *out_exact
 )
 {
     BoardState child = *board;
     NativeMove ignored;
+    uint8_t result_flag = EXACT;
     int child_remaining_game_moves = next_remaining_game_moves(root_remaining_game_moves);
+    int status;
 
     if (deadline_reached(ctx)) {
         return 1;
@@ -918,7 +1095,7 @@ evaluate_root_move(
 
     apply_move_native(&child, move, player);
     *nodes += 1;
-    return minimax_native(
+    status = minimax_native(
         &child,
         opponent,
         player,
@@ -930,8 +1107,13 @@ evaluate_root_move(
         ctx,
         nodes,
         out_value,
-        &ignored
+        &ignored,
+        &result_flag
     );
+    if (status == 0 && out_exact != NULL) {
+        *out_exact = result_flag == EXACT;
+    }
+    return status;
 }
 
 /* Resets one worker's reusable local context for a new iterative-deepening depth. */
@@ -943,6 +1125,8 @@ prepare_root_search_worker(RootSearchWorker *worker)
     tt_free(&worker->ctx.tt);
     init_search_context(&worker->ctx, pool->weights, pool->tie_break_lexicographic, pool->deadline_at);
     worker->ctx.tt_seed = pool->tt_seed;
+    worker->ctx.shared_root_alpha_bits = &pool->alpha_bits;
+    worker->ctx.root_alpha_floor = root_alpha_load(worker->ctx.shared_root_alpha_bits);
     if (pool->killer_moves_seed != NULL) {
         memcpy(worker->ctx.killer_moves, pool->killer_moves_seed, sizeof(worker->ctx.killer_moves));
     }
@@ -982,9 +1166,9 @@ root_search_worker_loop(RootSearchWorker *worker)
 
         for (;;) {
             int job_index;
-            double job_alpha;
             double value = 0.0;
             uint64_t nodes = 0;
+            int exact = 1;
             int status;
 
             root_mutex_lock(&pool->mutex);
@@ -995,9 +1179,10 @@ root_search_worker_loop(RootSearchWorker *worker)
                 break;
             }
             job_index = pool->next_job_index;
-            job_alpha = pool->alpha;
             pool->next_job_index += 1;
             root_mutex_unlock(&pool->mutex);
+
+            worker->ctx.root_alpha_floor = root_alpha_load(worker->ctx.shared_root_alpha_bits);
 
             status = evaluate_root_move(
                 pool->board,
@@ -1007,22 +1192,23 @@ root_search_worker_loop(RootSearchWorker *worker)
                 pool->depth_after_move,
                 pool->max_quiescence_depth,
                 pool->root_remaining_game_moves,
-                job_alpha,
+                worker->ctx.root_alpha_floor,
                 INFINITY,
                 &worker->ctx,
                 &nodes,
-                &value
+                &value,
+                &exact
             );
 
             root_mutex_lock(&pool->mutex);
             {
                 RootJobResult *result = &pool->results[job_index];
-                result->alpha = job_alpha;
+                result->alpha = worker->ctx.root_alpha_floor;
                 result->value = value;
                 result->nodes = nodes;
                 if (status == 0) {
                     result->status = ROOT_JOB_DONE;
-                    result->needs_exact = value == job_alpha;
+                    result->needs_exact = !exact;
                 } else if (status == 1) {
                     result->status = ROOT_JOB_TIMED_OUT;
                 } else {
@@ -1075,7 +1261,7 @@ root_search_thread_pool_begin(
     pool->depth_after_move = depth_after_move;
     pool->max_quiescence_depth = max_quiescence_depth;
     pool->root_remaining_game_moves = root_remaining_game_moves;
-    pool->alpha = alpha;
+    root_alpha_store(&pool->alpha_bits, alpha);
     pool->deadline_at = deadline_at;
     pool->weights = weights;
     pool->tie_break_lexicographic = tie_break_lexicographic;
@@ -1117,11 +1303,7 @@ root_search_thread_pool_wait_for_result(RootSearchThreadPool *pool, int result_i
 static void
 root_search_thread_pool_update_alpha(RootSearchThreadPool *pool, double alpha)
 {
-    root_mutex_lock(&pool->mutex);
-    if (alpha > pool->alpha) {
-        pool->alpha = alpha;
-    }
-    root_mutex_unlock(&pool->mutex);
+    root_alpha_raise(&pool->alpha_bits, alpha);
 }
 
 /* Stops assigning new jobs in the current queued root-search iteration. */
@@ -1410,7 +1592,8 @@ search_weighted_native_serial(
                 beta,
                 &ctx,
                 &iteration_nodes,
-                &child_value
+                &child_value,
+                NULL
             );
             if (status == 1) {
                 timed_out = 1;
@@ -1533,6 +1716,23 @@ search_weighted_native_threaded(
             out_result
         );
     }
+    if (requested_depth <= 1) {
+        return search_weighted_native_serial(
+            board,
+            player,
+            weights,
+            requested_depth,
+            max_quiescence_depth,
+            has_deadline,
+            time_budget_ms,
+            has_remaining_game_moves,
+            remaining_game_moves,
+            tie_break_lexicographic,
+            avoid_move,
+            root_candidate_limit,
+            out_result
+        );
+    }
 
     if (root_candidate_cap < 0) {
         root_candidate_cap = 0;
@@ -1573,7 +1773,24 @@ search_weighted_native_threaded(
     }
 
     threaded_worker_count = resolve_root_worker_count(legal_count);
-    if (threaded_worker_count > 0 && !root_search_thread_pool_init(&pool, threaded_worker_count)) {
+    if (threaded_worker_count < 2) {
+        return search_weighted_native_serial(
+            board,
+            player,
+            weights,
+            requested_depth,
+            max_quiescence_depth,
+            has_deadline,
+            time_budget_ms,
+            has_remaining_game_moves,
+            remaining_game_moves,
+            tie_break_lexicographic,
+            avoid_move,
+            root_candidate_limit,
+            out_result
+        );
+    }
+    if (!root_search_thread_pool_init(&pool, threaded_worker_count)) {
         return search_weighted_native_serial(
             board,
             player,
@@ -1609,6 +1826,8 @@ search_weighted_native_threaded(
         NativeMove current_best_move = best_move;
         double current_best_score = -INFINITY;
         RootCandidate depth_candidates[MAX_MOVES];
+        double root_scores[MAX_MOVES];
+        uint8_t root_score_valid[MAX_MOVES];
         int depth_candidate_count = 0;
         const TTEntry *root_entry;
         NativeMove tt_move;
@@ -1619,6 +1838,7 @@ search_weighted_native_threaded(
         int root_remaining_game_moves = has_remaining_game_moves ? remaining_game_moves : -1;
 
         memset(ctx.killer_moves, 0, sizeof(ctx.killer_moves));
+        memset(root_score_valid, 0, sizeof(root_score_valid));
 
         memcpy(ordered_root, legal_moves, sizeof(NativeMove) * legal_count);
         root_entry = tt_lookup(&ctx.tt, tt_key_for_state(board, player, TT_MODE_FULL, root_remaining_game_moves));
@@ -1650,7 +1870,8 @@ search_weighted_native_threaded(
                 beta,
                 &ctx,
                 &iteration_nodes,
-                &child_value
+                &child_value,
+                NULL
             );
             if (status == 1) {
                 timed_out = 1;
@@ -1664,6 +1885,8 @@ search_weighted_native_threaded(
             }
             current_best_score = child_value;
             current_best_move = ordered_root[0];
+            root_scores[0] = child_value;
+            root_score_valid[0] = 1;
             if (root_candidate_cap > 0) {
                 depth_candidates[depth_candidate_count].move = ordered_root[0];
                 depth_candidates[depth_candidate_count].score = child_value;
@@ -1677,8 +1900,9 @@ search_weighted_native_threaded(
 
         if (legal_count > 1) {
             int serial_seed_limit = 1;
-            if (threaded_worker_count > 0) {
-                serial_seed_limit = legal_count < 4 ? legal_count : 4;
+            if (threaded_worker_count >= 2) {
+                int desired_seed_limit = threaded_worker_count > 2 ? threaded_worker_count : 2;
+                serial_seed_limit = legal_count < desired_seed_limit ? legal_count : desired_seed_limit;
             }
 
             for (move_index = 1; move_index < serial_seed_limit; ++move_index) {
@@ -1695,7 +1919,8 @@ search_weighted_native_threaded(
                     beta,
                     &ctx,
                     &iteration_nodes,
-                    &child_value
+                    &child_value,
+                    NULL
                 );
                 if (status == 1) {
                     timed_out = 1;
@@ -1706,6 +1931,8 @@ search_weighted_native_threaded(
                     root_search_thread_pool_destroy(&pool);
                     return -1;
                 }
+                root_scores[move_index] = child_value;
+                root_score_valid[move_index] = 1;
                 if (child_value > current_best_score ||
                         (child_value == current_best_score &&
                             prefer_by_tie_break(ctx.tie_break_lexicographic, &ordered_root[move_index], &current_best_move))) {
@@ -1717,7 +1944,7 @@ search_weighted_native_threaded(
                 }
             }
 
-            if (!timed_out && threaded_worker_count > 0 && idx > 1 && legal_count > serial_seed_limit) {
+            if (!timed_out && threaded_worker_count >= 2 && idx > 1 && legal_count > serial_seed_limit) {
                 RootJobResult worker_results[MAX_MOVES];
 
                 memset(worker_results, 0, sizeof(worker_results));
@@ -1778,7 +2005,7 @@ search_weighted_native_threaded(
                         root_search_thread_pool_cancel(&pool);
                         break;
                     }
-                    if (result.needs_exact && child_value >= alpha) {
+                    if (child_value >= alpha) {
                         int status = evaluate_root_move(
                             board,
                             &ordered_root[move_index],
@@ -1791,7 +2018,8 @@ search_weighted_native_threaded(
                             beta,
                             &ctx,
                             &iteration_nodes,
-                            &child_value
+                            &child_value,
+                            NULL
                         );
                         if (status == 1) {
                             timed_out = 1;
@@ -1810,6 +2038,8 @@ search_weighted_native_threaded(
                             return -1;
                         }
                     }
+                    root_scores[move_index] = child_value;
+                    root_score_valid[move_index] = 1;
                     if (child_value > current_best_score ||
                             (child_value == current_best_score &&
                                 prefer_by_tie_break(ctx.tie_break_lexicographic, &ordered_root[move_index], &current_best_move))) {
@@ -1842,7 +2072,8 @@ search_weighted_native_threaded(
                         beta,
                         &ctx,
                         &iteration_nodes,
-                        &child_value
+                        &child_value,
+                        NULL
                     );
                     if (status == 1) {
                         timed_out = 1;
@@ -1853,6 +2084,8 @@ search_weighted_native_threaded(
                         root_search_thread_pool_destroy(&pool);
                         return -1;
                     }
+                    root_scores[move_index] = child_value;
+                    root_score_valid[move_index] = 1;
                     if (child_value > current_best_score ||
                             (child_value == current_best_score &&
                                 prefer_by_tie_break(ctx.tie_break_lexicographic, &ordered_root[move_index], &current_best_move))) {
@@ -1868,6 +2101,91 @@ search_weighted_native_threaded(
                     if (current_best_score > alpha) {
                         alpha = current_best_score;
                     }
+                }
+            }
+        }
+
+        if (!timed_out && threaded_worker_count >= 2) {
+            int tied_count = 0;
+            const double tie_epsilon = 1e-6;
+
+            for (move_index = 0; move_index < legal_count; ++move_index) {
+                if (root_score_valid[move_index] &&
+                        fabs(root_scores[move_index] - current_best_score) <= tie_epsilon) {
+                    tied_count += 1;
+                }
+            }
+
+            if (tied_count > 1) {
+                SearchContext tie_ctx;
+                NativeMove tie_best_move;
+                double tie_best_score = -INFINITY;
+
+                init_search_context(&tie_ctx, weights, tie_break_lexicographic, ctx.deadline_at);
+                if (!tt_init(&tie_ctx.tt, 1024U)) {
+                    tt_free(&ctx.tt);
+                    root_search_thread_pool_destroy(&pool);
+                    return -1;
+                }
+
+                move_clear(&tie_best_move);
+                for (move_index = 0; move_index < legal_count; ++move_index) {
+                    double tie_value = 0.0;
+                    uint64_t tie_nodes = 0;
+                    int status;
+
+                    if (!root_score_valid[move_index] ||
+                            fabs(root_scores[move_index] - current_best_score) > tie_epsilon) {
+                        continue;
+                    }
+
+                    status = evaluate_root_move(
+                        board,
+                        &ordered_root[move_index],
+                        player,
+                        opponent,
+                        idx - 1,
+                        max_quiescence_depth,
+                        root_remaining_game_moves,
+                        -INFINITY,
+                        INFINITY,
+                        &tie_ctx,
+                        &tie_nodes,
+                        &tie_value,
+                        NULL
+                    );
+                    iteration_nodes += tie_nodes;
+                    if (status == 1) {
+                        timed_out = 1;
+                        break;
+                    }
+                    if (status != 0) {
+                        tt_free(&tie_ctx.tt);
+                        tt_free(&ctx.tt);
+                        root_search_thread_pool_destroy(&pool);
+                        return -1;
+                    }
+                    if (tie_value > tie_best_score ||
+                            (tie_value == tie_best_score &&
+                                prefer_by_tie_break(ctx.tie_break_lexicographic, &ordered_root[move_index], &tie_best_move))) {
+                        tie_best_score = tie_value;
+                        tie_best_move = ordered_root[move_index];
+                    }
+                }
+
+                tt_free(&tie_ctx.tt);
+                if (timed_out) {
+                    total_nodes += iteration_nodes;
+                    if (current_best_score != -INFINITY) {
+                        best_score = current_best_score;
+                    }
+                    best_move = current_best_move;
+                    break;
+                }
+                if (move_has_value(&tie_best_move)) {
+                    current_best_move = tie_best_move;
+                    current_best_score = tie_best_score;
+                    alpha = current_best_score;
                 }
             }
         }
@@ -1942,6 +2260,41 @@ search_weighted_native(
 )
 {
     return search_weighted_native_threaded(
+        board,
+        player,
+        weights,
+        requested_depth,
+        max_quiescence_depth,
+        has_deadline,
+        time_budget_ms,
+        has_remaining_game_moves,
+        remaining_game_moves,
+        tie_break_lexicographic,
+        avoid_move,
+        root_candidate_limit,
+        out_result
+    );
+}
+
+/* Exposes the native serial reference search for parity tests and local benchmarking. */
+int
+search_weighted_native_serial_for_testing(
+    const BoardState *board,
+    int player,
+    const double *weights,
+    int requested_depth,
+    int max_quiescence_depth,
+    int has_deadline,
+    int time_budget_ms,
+    int has_remaining_game_moves,
+    int remaining_game_moves,
+    int tie_break_lexicographic,
+    const NativeMove *avoid_move,
+    int root_candidate_limit,
+    SearchResultNative *out_result
+)
+{
+    return search_weighted_native_serial(
         board,
         player,
         weights,

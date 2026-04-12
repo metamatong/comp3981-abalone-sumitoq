@@ -90,6 +90,8 @@ typedef struct {
     double deadline_at;
     TTTable tt;
     const TTTable *tt_seed;
+    const uint64_t *shared_root_alpha_bits;
+    double root_alpha_floor;
     NativeMove killer_moves[64];
 } SearchContext;
 
@@ -133,6 +135,21 @@ void order_moves(
 );
 void apply_move_native(BoardState *board, const NativeMove *move, int player);
 int search_weighted_native(
+    const BoardState *board,
+    int player,
+    const double *weights,
+    int requested_depth,
+    int max_quiescence_depth,
+    int has_deadline,
+    int time_budget_ms,
+    int has_remaining_game_moves,
+    int remaining_game_moves,
+    int tie_break_lexicographic,
+    const NativeMove *avoid_move,
+    int root_candidate_limit,
+    SearchResultNative *out_result
+);
+int search_weighted_native_serial_for_testing(
     const BoardState *board,
     int player,
     const double *weights,

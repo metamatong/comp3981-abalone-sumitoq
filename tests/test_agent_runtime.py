@@ -593,12 +593,20 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(actual.completed_depth, expected.completed_depth)
         self.assertEqual(actual.decision_source, expected.decision_source)
 
-    def test_native_root_worker_default_uses_twelve_when_env_unset(self):
+    def test_native_root_worker_default_tracks_low_core_hosts(self):
         native_ext = native.require_available()
 
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ABALONE_NATIVE_ROOT_THREADS", None)
-            self.assertEqual(native_ext._resolve_root_worker_count(20, 32), 12)
+            self.assertEqual(native_ext._resolve_root_worker_count(20, 1), 0)
+            self.assertEqual(native_ext._resolve_root_worker_count(20, 2), 1)
+
+    def test_native_root_worker_default_caps_at_four_on_high_core_hosts(self):
+        native_ext = native.require_available()
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ABALONE_NATIVE_ROOT_THREADS", None)
+            self.assertEqual(native_ext._resolve_root_worker_count(20, 32), 4)
 
     def test_native_root_worker_env_override_takes_precedence(self):
         native_ext = native.require_available()
@@ -612,6 +620,77 @@ class AgentRuntimeTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ABALONE_NATIVE_ROOT_THREADS", None)
             self.assertEqual(native_ext._resolve_root_worker_count(5, 32), 4)
+
+    def test_threaded_native_search_matches_serial_native_reference(self):
+        board_token = (
+            "a1b,a2b,a3b,a5b,b1b,b2b,b3b,b4b,b5b,b6b,c3b,d4b,d5b,e5b,"
+            "f5w,g4w,g5w,g7w,h4w,h5w,h6w,h7w,h8w,h9w,i5w,i7w,i8w,i9w|0-0"
+        )
+        fixtures = [
+            ("standard_black", "standard", None, BLACK, "default"),
+            ("german_black", "german_daisy", None, BLACK, "jonah"),
+            ("mid_white", None, board_token, WHITE, "default"),
+        ]
+
+        for name, layout, token, player, agent_id in fixtures:
+            for depth in (2, 4, 6):
+                with self.subTest(case=name, depth=depth):
+                    if token is not None:
+                        board = Board.from_compact_token(token)
+                    else:
+                        board = Board()
+                        board.setup_layout(layout)
+                    agent = get_agent(agent_id)
+                    config = AgentConfig(depth=depth, is_opening_turn=False)
+
+                    with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+                        with mock.patch(
+                            "abalone.ai.minimax.native_search_weighted",
+                            new=native._search_weighted_serial,
+                        ):
+                            expected = choose_move_with_info(
+                                board.copy(),
+                                player,
+                                agent=agent,
+                                config=config,
+                            )
+                        actual = choose_move_with_info(
+                            board.copy(),
+                            player,
+                            agent=agent,
+                            config=config,
+                        )
+
+                    self.assertAlmostEqual(actual.score, expected.score)
+                    self.assertEqual(actual.completed_depth, expected.completed_depth)
+                    self.assertEqual(actual.decision_source, expected.decision_source)
+                    if actual.move.to_notation() != expected.move.to_notation():
+                        candidate_config = AgentConfig(
+                            depth=depth,
+                            is_opening_turn=False,
+                            root_candidate_limit=32,
+                        )
+                        with mock.patch("abalone.ai.minimax._FORCE_WEIGHTED_SEARCH_PATH", "native"):
+                            with mock.patch(
+                                "abalone.ai.minimax.native_search_weighted",
+                                new=native._search_weighted_serial,
+                            ):
+                                reference = choose_move_with_info(
+                                    board.copy(),
+                                    player,
+                                    agent=agent,
+                                    config=candidate_config,
+                                )
+                        self.assertIsNotNone(reference.root_candidates)
+                        top_score = reference.root_candidates[0]["score"]
+                        top_moves = {
+                            candidate["notation"]
+                            for candidate in reference.root_candidates
+                            if candidate["score"] == top_score
+                        }
+                        self.assertIn(actual.move.to_notation(), top_moves)
+                    else:
+                        self.assertEqual(actual.move.to_notation(), expected.move.to_notation())
 
     def test_threaded_native_search_matches_python_reference(self):
         fixtures = [
