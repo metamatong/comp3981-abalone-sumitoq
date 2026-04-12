@@ -4,15 +4,15 @@ from ....ai.heuristics import build_weighted_evaluator
 
 # Standard board: 10 min game clock, 5s per move, no move limit.
 STANDARD_WEIGHTS = {
-    "center": 444.070642,
-    "cluster": 61.900624,
-    "cohesion": 249.471523,
-    "edge_pressure": 207.366499,
-    "formation": 295.954056,
-    "marble": 51858.270528,
-    "mobility": 114.232688,
-    "push": 1465.320381,
-    "stability": 145.829084,
+    "center": 539.650629,
+    "cluster": 73.054022,
+    "cohesion": 297.928703,
+    "edge_pressure": 259.036947,
+    "formation": 348.401769,
+    "marble": 52930.178228,
+    "mobility": 93.707985,
+    "push": 1767.763631,
+    "stability": 187.479808
 }
 
 evaluate_standard = build_weighted_evaluator(STANDARD_WEIGHTS)
