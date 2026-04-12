@@ -32,7 +32,9 @@ def _native_build_command() -> str:
 
 def _preflight_native_runtime() -> None:
     from abalone.native import preflight_or_exit
+    import importlib
 
+    importlib.import_module("abalone._native")
     preflight_or_exit(_native_build_command())
 
 
