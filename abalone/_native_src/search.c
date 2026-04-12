@@ -1,6 +1,8 @@
 /* Applies moves and runs the native alpha-beta search with iterative deepening. */
 #include "common.h"
 
+#define TERMINAL_SCORE 1000000000.0
+
 /* Mixes a 64-bit board hash for transposition-table indexing. */
 static uint64_t
 mix_hash64(uint64_t value)
@@ -133,6 +135,44 @@ static int
 deadline_reached(const SearchContext *ctx)
 {
     return ctx->deadline_at >= 0.0 && monotonic_seconds() >= ctx->deadline_at;
+}
+
+/* Reports whether a player has already secured the sixth capture. */
+static int
+player_has_terminal_win(const BoardState *board, int player)
+{
+    int opponent = player == BLACK ? WHITE : BLACK;
+    uint8_t marbles[14];
+
+    if (board->scores[player] >= 6) {
+        return 1;
+    }
+    return list_marbles(board, opponent, marbles) <= 8;
+}
+
+/* Reports whether either side has already reached a game-ending state. */
+static int
+is_terminal_position(const BoardState *board)
+{
+    return player_has_terminal_win(board, BLACK) || player_has_terminal_win(board, WHITE);
+}
+
+/* Returns a forced terminal score, preferring faster wins and slower losses. */
+static int
+terminal_value(const BoardState *board, int root_player, int depth_remaining, double *out_value)
+{
+    int opponent = root_player == BLACK ? WHITE : BLACK;
+    double depth_bonus = depth_remaining > 0 ? (double) depth_remaining : 0.0;
+
+    if (player_has_terminal_win(board, root_player)) {
+        *out_value = TERMINAL_SCORE + depth_bonus;
+        return 1;
+    }
+    if (player_has_terminal_win(board, opponent)) {
+        *out_value = -TERMINAL_SCORE - depth_bonus;
+        return 1;
+    }
+    return 0;
 }
 
 /* Reports whether a move is tactical enough to extend quiescence. */
@@ -268,8 +308,17 @@ quiescence_native(
         move_clear(&tt_move);
     }
 
+    if (terminal_value(board, root_player, remaining_depth, &stand_pat)) {
+        move_clear(out_move);
+        if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
+            return -1;
+        }
+        *out_value = stand_pat;
+        return 0;
+    }
+
     stand_pat = evaluate_weighted_native(board, root_player, ctx->weights);
-    if (remaining_depth <= 0 || board_terminal(board) || remaining_game_moves <= 0) {
+    if (remaining_depth <= 0 || remaining_game_moves <= 0) {
         move_clear(out_move);
         if (!tt_store(&ctx->tt, key, remaining_depth, stand_pat, EXACT, out_move)) {
             return -1;
@@ -442,7 +491,7 @@ minimax_native(
         move_clear(out_move);
         return 0;
     }
-    if (depth == 0 && !board_terminal(board) && max_quiescence_depth > 0) {
+    if (depth == 0 && !is_terminal_position(board) && max_quiescence_depth > 0) {
         return quiescence_native(
             board,
             to_move,
@@ -482,7 +531,12 @@ minimax_native(
         move_clear(&tt_move);
     }
 
-    if (depth == 0 || board_terminal(board)) {
+    if (terminal_value(board, root_player, depth, out_value)) {
+        move_clear(out_move);
+        return 0;
+    }
+
+    if (depth == 0) {
         *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
         move_clear(out_move);
         return 0;
@@ -493,7 +547,9 @@ minimax_native(
         return -1;
     }
     if (legal_count == 0) {
-        *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
+        if (!terminal_value(board, root_player, depth, out_value)) {
+            *out_value = evaluate_weighted_native(board, root_player, ctx->weights);
+        }
         move_clear(out_move);
         return 0;
     }
@@ -641,6 +697,17 @@ search_weighted_native(
         return -1;
     }
 
+    if (terminal_value(board, player, requested_depth, &out_result->score)) {
+        move_clear(&out_result->move);
+        out_result->nodes = 0;
+        out_result->completed_depth = 0;
+        out_result->timed_out = 0;
+        out_result->avoidance_applied = 0;
+        out_result->root_candidate_count = 0;
+        tt_free(&ctx.tt);
+        return 0;
+    }
+
     legal_count = generate_legal_moves_native(board, player, legal_moves);
     if (legal_count < 0) {
         tt_free(&ctx.tt);
@@ -648,7 +715,9 @@ search_weighted_native(
     }
     if (legal_count == 0) {
         move_clear(&out_result->move);
-        out_result->score = evaluate_weighted_native(board, player, weights);
+        if (!terminal_value(board, player, requested_depth, &out_result->score)) {
+            out_result->score = evaluate_weighted_native(board, player, weights);
+        }
         out_result->nodes = 0;
         out_result->completed_depth = 0;
         out_result->timed_out = 0;

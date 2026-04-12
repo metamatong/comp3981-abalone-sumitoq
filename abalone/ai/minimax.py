@@ -23,6 +23,7 @@ TT_MODE_FULL = 0
 TT_MODE_QUIESCENCE = 1
 
 _FORCE_WEIGHTED_SEARCH_PATH: Optional[str] = None
+TERMINAL_SCORE = 1_000_000_000.0
 
 
 @dataclass
@@ -124,6 +125,8 @@ def _normalize_root_candidates(raw_candidates, limit: int):
         root_candidates,
         key=lambda item: (-float(item["score"]), str(item["notation"])),
     )[:limit]
+
+
 def _opponent(player: int) -> int:
     """Return the opposing color constant."""
     return WHITE if player == BLACK else BLACK
@@ -131,7 +134,23 @@ def _opponent(player: int) -> int:
 
 def _is_terminal(board: Board) -> bool:
     """Return whether either player has reached the capture win condition."""
-    return board.score[BLACK] >= 6 or board.score[WHITE] >= 6
+    return (
+        board.score[BLACK] >= 6
+        or board.score[WHITE] >= 6
+        or board.marble_count(BLACK) <= 8
+        or board.marble_count(WHITE) <= 8
+    )
+
+
+def _terminal_value(board: Board, root_player: int, depth_remaining: int) -> Optional[float]:
+    """Return a forced terminal score, preferring faster wins and slower losses."""
+    opponent = _opponent(root_player)
+    depth_bonus = max(0, depth_remaining)
+    if board.score[root_player] >= 6 or board.marble_count(opponent) <= 8:
+        return TERMINAL_SCORE + depth_bonus
+    if board.score[opponent] >= 6 or board.marble_count(root_player) <= 8:
+        return -TERMINAL_SCORE - depth_bonus
+    return None
 
 
 def _is_push_move(board: Board, player: int, move: Move) -> bool:
@@ -183,8 +202,13 @@ def _quiescence(
 
     tt_move = tt_entry.move if tt_entry is not None else None
 
+    terminal_value = _terminal_value(board, root_player, remaining_depth)
+    if terminal_value is not None:
+        tt[tt_key] = TTEntry(depth=remaining_depth, value=terminal_value, flag=EXACT, move=None)
+        return terminal_value, None
+
     stand_pat = evaluator(board, root_player)
-    if remaining_depth <= 0 or _is_terminal(board) or (remaining_game_moves is not None and remaining_game_moves <= 0):
+    if remaining_depth <= 0 or (remaining_game_moves is not None and remaining_game_moves <= 0):
         tt[tt_key] = TTEntry(depth=remaining_depth, value=stand_pat, flag=EXACT, move=None)
         return stand_pat, None
 
@@ -319,6 +343,66 @@ def _prefer_by_tie_break(tie_break: str, candidate: Move, incumbent: Optional[Mo
     return False
 
 
+def _immediate_terminal_root_result(
+    board: Board,
+    player: int,
+    resolved_agent: AgentDefinition,
+    resolved_config,
+) -> Optional[SearchResult]:
+    """Short-circuit when a legal root move wins the game immediately."""
+    opponent = _opponent(player)
+    if board.score[player] < 5 and board.marble_count(opponent) > 9:
+        return None
+
+    start = time.perf_counter()
+    winning_moves: List[Move] = []
+    for move in generate_legal_moves(board, player):
+        child = board.copy()
+        child.apply_move(move, player)
+        if _terminal_value(child, player, 0) is not None and (
+            child.score[player] >= 6 or child.marble_count(opponent) <= 8
+        ):
+            winning_moves.append(move)
+
+    if not winning_moves:
+        return None
+
+    best_move = winning_moves[0]
+    for move in winning_moves[1:]:
+        if _prefer_by_tie_break(resolved_config.tie_break, move, best_move):
+            best_move = move
+
+    root_candidates = None
+    if resolved_config.root_candidate_limit > 0:
+        root_candidates = [
+            {
+                "notation": move.to_notation(),
+                "score": TERMINAL_SCORE,
+                "depth": 1,
+            }
+            for move in sorted(winning_moves, key=lambda move: move.ordering_key)[
+                : resolved_config.root_candidate_limit
+            ]
+        ]
+
+    return SearchResult(
+        move=best_move,
+        score=TERMINAL_SCORE,
+        nodes=0,
+        elapsed_ms=(time.perf_counter() - start) * 1000.0,
+        depth=resolved_config.depth,
+        completed_depth=1,
+        decision_source="search",
+        timed_out=False,
+        time_budget_ms=resolved_config.time_budget_ms,
+        agent_id=resolved_agent.id,
+        agent_label=resolved_agent.label,
+        root_candidates=root_candidates,
+        analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+        board_token_before=resolved_config.board_token_before,
+    )
+
+
 def _check_deadline(deadline_at: Optional[float]) -> None:
     """Raise when the active deadline has expired."""
     if deadline_at is not None and time.perf_counter() >= deadline_at:
@@ -393,7 +477,11 @@ def _minimax(
 
     tt_move = tt_entry.move if tt_entry is not None else None
 
-    if depth == 0 or _is_terminal(board):
+    terminal_value = _terminal_value(board, root_player, depth)
+    if terminal_value is not None:
+        return terminal_value, None
+
+    if depth == 0:
         return evaluator(board, root_player), None
 
     if root_legal_moves is not None:
@@ -402,6 +490,9 @@ def _minimax(
         legal_moves = generate_legal_moves(board, to_move)
 
     if not legal_moves:
+        terminal_value = _terminal_value(board, root_player, depth)
+        if terminal_value is not None:
+            return terminal_value, None
         return evaluator(board, root_player), None
 
     legal_moves = _ordered_moves(board, to_move, legal_moves, tt_move, killer_moves, depth)
@@ -498,6 +589,9 @@ def search_best_move(
     """Return best move and diagnostics for `player`."""
     resolved_agent = agent or DEFAULT_AGENT
     resolved_config = resolve_agent_config(resolved_agent, config)
+    immediate_terminal_result = _immediate_terminal_root_result(board, player, resolved_agent, resolved_config)
+    if immediate_terminal_result is not None:
+        return immediate_terminal_result
     agent_weights = getattr(resolved_agent.evaluator, "weights", None)
     force_path = _FORCE_WEIGHTED_SEARCH_PATH
     use_native = bool(agent_weights) and force_path != "python"
@@ -574,12 +668,31 @@ def _search_best_move_python(
     if resolved_config.time_budget_ms and resolved_config.time_budget_ms > 0:
         deadline_at = start + (resolved_config.time_budget_ms / 1000.0)
 
+    terminal_value = _terminal_value(board, player, requested_depth)
+    if terminal_value is not None:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return SearchResult(
+            move=None,
+            score=terminal_value,
+            nodes=0,
+            elapsed_ms=elapsed_ms,
+            depth=requested_depth,
+            completed_depth=0,
+            decision_source="search",
+            timed_out=False,
+            time_budget_ms=resolved_config.time_budget_ms,
+            agent_id=resolved_agent.id,
+            agent_label=resolved_agent.label,
+            analysis_evaluator_id=resolved_config.analysis_evaluator_id,
+            board_token_before=resolved_config.board_token_before,
+        )
+
     legal_moves = _ordered_moves(board, player, generate_legal_moves(board, player))
     if not legal_moves:
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return SearchResult(
             move=None,
-            score=resolved_agent.evaluator(board, player),
+            score=resolved_agent.evaluator(board, player) if terminal_value is None else terminal_value,
             nodes=0,
             elapsed_ms=elapsed_ms,
             depth=requested_depth,
