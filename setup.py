@@ -19,10 +19,22 @@ def _compile_args():
     return ["-O3", "-flto"]
 
 
+def _thread_compile_args():
+    if sys.platform.startswith("win"):
+        return []
+    return ["-pthread"]
+
+
 def _link_args():
     if sys.platform.startswith("win"):
         return ["/LTCG"]
     return ["-flto"]
+
+
+def _thread_link_args():
+    if sys.platform.startswith("win"):
+        return []
+    return ["-pthread"]
 
 
 setup(
@@ -39,8 +51,8 @@ setup(
                 "abalone/_native_src/search.c",
             ],
             include_dirs=["abalone/_native_src"],
-            extra_compile_args=_compile_args(),
-            extra_link_args=_link_args(),
+            extra_compile_args=_compile_args() + _thread_compile_args(),
+            extra_link_args=_link_args() + _thread_link_args(),
         )
     ],
 )

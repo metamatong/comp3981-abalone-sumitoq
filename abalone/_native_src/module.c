@@ -260,9 +260,9 @@ py_evaluate_weighted(PyObject *self, PyObject *args)
     return PyFloat_FromDouble(evaluate_weighted_native(&board, player, weights));
 }
 
-/* Python wrapper for native iterative-deepening weighted search. */
+/* Shared parser/serializer for the threaded and serial native search entrypoints. */
 static PyObject *
-py_search_weighted(PyObject *self, PyObject *args)
+py_search_weighted_impl(PyObject *self, PyObject *args, int force_serial)
 {
     Py_buffer cells_buffer;
     int black_score;
@@ -367,21 +367,41 @@ py_search_weighted(PyObject *self, PyObject *args)
     tie_break_lexicographic = strcmp(tie_break, "lexicographic") == 0;
 
     memset(&result, 0, sizeof(result));
-    status = search_weighted_native(
-        &board,
-        player,
-        weights,
-        depth,
-        max_quiescence_depth,
-        has_deadline,
-        time_budget_ms,
-        has_remaining_game_moves,
-        remaining_game_moves,
-        tie_break_lexicographic,
-        &avoid_move,
-        root_candidate_limit,
-        &result
-    );
+    Py_BEGIN_ALLOW_THREADS
+    if (force_serial) {
+        status = search_weighted_native_serial_for_testing(
+            &board,
+            player,
+            weights,
+            depth,
+            max_quiescence_depth,
+            has_deadline,
+            time_budget_ms,
+            has_remaining_game_moves,
+            remaining_game_moves,
+            tie_break_lexicographic,
+            &avoid_move,
+            root_candidate_limit,
+            &result
+        );
+    } else {
+        status = search_weighted_native(
+            &board,
+            player,
+            weights,
+            depth,
+            max_quiescence_depth,
+            has_deadline,
+            time_budget_ms,
+            has_remaining_game_moves,
+            remaining_game_moves,
+            tie_break_lexicographic,
+            &avoid_move,
+            root_candidate_limit,
+            &result
+        );
+    }
+    Py_END_ALLOW_THREADS
     if (status < 0) {
         PyErr_SetString(PyExc_RuntimeError, "native weighted search failed");
         return NULL;
@@ -453,10 +473,40 @@ py_search_weighted(PyObject *self, PyObject *args)
     return payload;
 }
 
+/* Python wrapper for native iterative-deepening weighted search. */
+static PyObject *
+py_search_weighted(PyObject *self, PyObject *args)
+{
+    return py_search_weighted_impl(self, args, 0);
+}
+
+/* Internal Python wrapper for the native serial reference search. */
+static PyObject *
+py_search_weighted_serial(PyObject *self, PyObject *args)
+{
+    return py_search_weighted_impl(self, args, 1);
+}
+
+/* Python test hook for the native root-worker resolution policy. */
+static PyObject *
+py_resolve_root_worker_count(PyObject *self, PyObject *args)
+{
+    int legal_count;
+    unsigned int cpu_count;
+
+    (void) self;
+    if (!PyArg_ParseTuple(args, "iI", &legal_count, &cpu_count)) {
+        return NULL;
+    }
+    return PyLong_FromLong(debug_resolve_root_worker_count(legal_count, cpu_count));
+}
+
 static PyMethodDef module_methods[] = {
     {"generate_legal_moves", py_generate_legal_moves, METH_VARARGS, "Generate legal moves from a compact board payload."},
     {"evaluate_weighted", py_evaluate_weighted, METH_VARARGS, "Evaluate a board using shared heuristic weights."},
     {"search_weighted", py_search_weighted, METH_VARARGS, "Run the native weighted minimax search."},
+    {"_search_weighted_serial", py_search_weighted_serial, METH_VARARGS, "Internal serial native search hook for parity tests."},
+    {"_resolve_root_worker_count", py_resolve_root_worker_count, METH_VARARGS, "Internal helper for root worker-count tests."},
     {NULL, NULL, 0, NULL},
 };
 

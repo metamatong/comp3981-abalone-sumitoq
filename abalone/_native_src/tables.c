@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <pthread.h>
 #include <time.h>
 #endif
 
@@ -25,6 +26,12 @@ uint8_t g_edge_pressure[CELL_COUNT];
 uint64_t g_zobrist[CELL_COUNT][3];
 uint64_t g_side_zobrist[3];
 
+#ifdef _WIN32
+static INIT_ONCE g_tables_once = INIT_ONCE_STATIC_INIT;
+#else
+static pthread_once_t g_tables_once = PTHREAD_ONCE_INIT;
+#endif
+
 /* Advances the SplitMix64 generator used for deterministic Zobrist seeds. */
 static uint64_t
 next_splitmix64(uint64_t *generator_state)
@@ -36,17 +43,13 @@ next_splitmix64(uint64_t *generator_state)
 }
 
 /* Builds board-coordinate tables, adjacency caches, edge metrics, and Zobrist keys. */
-void
-init_tables(void)
+static void
+init_tables_impl(void)
 {
     int board_row;
     int board_col;
     int cell_idx;
     uint64_t seed;
-
-    if (g_tables_ready) {
-        return;
-    }
 
     memset(g_pos_index, -1, sizeof(g_pos_index));
     cell_idx = 0;
@@ -107,6 +110,31 @@ init_tables(void)
     g_side_zobrist[WHITE] = next_splitmix64(&seed);
 
     g_tables_ready = 1;
+}
+
+#ifdef _WIN32
+static BOOL CALLBACK
+init_tables_once(PINIT_ONCE init_once, PVOID parameter, PVOID *context)
+{
+    (void) init_once;
+    (void) parameter;
+    (void) context;
+    init_tables_impl();
+    return TRUE;
+}
+#endif
+
+void
+init_tables(void)
+{
+    if (g_tables_ready) {
+        return;
+    }
+#ifdef _WIN32
+    InitOnceExecuteOnce(&g_tables_once, init_tables_once, NULL, NULL);
+#else
+    pthread_once(&g_tables_once, init_tables_impl);
+#endif
 }
 
 /* Returns a monotonic wall-clock timestamp in seconds for time-budget checks. */

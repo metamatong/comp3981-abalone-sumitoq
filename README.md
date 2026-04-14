@@ -253,8 +253,13 @@ python3 run.py cli --mode ava --depth 2 --black-ai kyle --white-ai cole
 
 - Black's first AI move is a random legal move, as required for the project.
 - After the opening move, all AI turns use the native-backed search path exposed through `abalone/ai/minimax.py`.
+- Native root search defaults to up to `4` worker threads when `ABALONE_NATIVE_ROOT_THREADS` is unset, and it scales down on lower-core hosts.
+- Set `ABALONE_NATIVE_ROOT_THREADS` to override that per-move native thread count for local benchmarking or tuning.
+- If the resolved native worker count is below `2`, the engine automatically falls back to the serial native reference path.
 - The search uses iterative deepening and respects the remaining per-turn budget.
 - When `max_quiescence_depth > 0`, leaf nodes can extend through a bounded quiescence search over tactical push/contact moves.
+- Requests that include root candidates stay on the serial native path, so they are not suitable for raw threading benchmarks.
+- `--jobs` only controls match/gauntlet process parallelism and does not change the per-move native root thread count.
 - If a search runs out of time before completing a depth, it returns the best fully completed result so far.
 - If no depth finishes in time, it falls back to an immediate legal move.
 

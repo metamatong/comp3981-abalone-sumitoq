@@ -114,7 +114,8 @@ def evaluate_weighted(board, player: int, ordered_weights: Iterable[float]):
     )
 
 
-def search_weighted(
+def _search_weighted_via(
+    entrypoint_name: str,
     board,
     player: int,
     ordered_weights: Iterable[float],
@@ -127,11 +128,12 @@ def search_weighted(
     avoid_move: Optional[object],
     root_candidate_limit: int,
 ):
-    """Run the native weighted search."""
+    """Run a named native weighted-search entrypoint and normalize its payload."""
     native_ext = require_available()
     api = _board_api()
+    entrypoint = getattr(native_ext, entrypoint_name)
 
-    raw_result = native_ext.search_weighted(
+    raw_result = entrypoint(
         _encode_board_cells(board),
         int(board.score[api["BLACK"]]),
         int(board.score[api["WHITE"]]),
@@ -157,3 +159,61 @@ def search_weighted(
         for candidate in raw_candidates
     ]
     return result
+
+
+def search_weighted(
+    board,
+    player: int,
+    ordered_weights: Iterable[float],
+    *,
+    depth: int,
+    max_quiescence_depth: int,
+    time_budget_ms,
+    remaining_game_moves,
+    tie_break: str,
+    avoid_move: Optional[object],
+    root_candidate_limit: int,
+):
+    """Run the native weighted search."""
+    return _search_weighted_via(
+        "search_weighted",
+        board,
+        player,
+        ordered_weights,
+        depth=depth,
+        max_quiescence_depth=max_quiescence_depth,
+        time_budget_ms=time_budget_ms,
+        remaining_game_moves=remaining_game_moves,
+        tie_break=tie_break,
+        avoid_move=avoid_move,
+        root_candidate_limit=root_candidate_limit,
+    )
+
+
+def _search_weighted_serial(
+    board,
+    player: int,
+    ordered_weights: Iterable[float],
+    *,
+    depth: int,
+    max_quiescence_depth: int,
+    time_budget_ms,
+    remaining_game_moves,
+    tie_break: str,
+    avoid_move: Optional[object],
+    root_candidate_limit: int,
+):
+    """Run the internal serial native search reference path."""
+    return _search_weighted_via(
+        "_search_weighted_serial",
+        board,
+        player,
+        ordered_weights,
+        depth=depth,
+        max_quiescence_depth=max_quiescence_depth,
+        time_budget_ms=time_budget_ms,
+        remaining_game_moves=remaining_game_moves,
+        tie_break=tie_break,
+        avoid_move=avoid_move,
+        root_candidate_limit=root_candidate_limit,
+    )
