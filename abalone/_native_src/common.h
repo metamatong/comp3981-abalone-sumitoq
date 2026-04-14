@@ -12,6 +12,7 @@
 #define FEATURE_COUNT 9
 #define MAX_MOVES 256
 #define INVALID_INDEX 255
+#define TERMINAL_SCORE 1000000000.0
 
 #define EMPTY 0
 #define BLACK 1
