@@ -183,8 +183,12 @@ Use these preset IDs with `--black-ai` and `--white-ai`:
 | `cole` | Cole | Member-owned preset from `abalone/players/teams/cole/` |
 | `jonah` | Jonah | Member-owned preset from `abalone/players/teams/jonah/` |
 | `tournament-standard` | Tournament | Layout-tuned preset from `abalone/players/teams/standard/` |
-| `tournament-belgian` | Tournament | Layout-tuned preset from `abalone/players/teams/belgian_daisy/` |
-| `tournament-german` | Tournament | Layout-tuned preset from `abalone/players/teams/german_daisy/` |
+| `tournament-belgian-1` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_belgian_1/` |
+| `tournament-belgian-2` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_belgian_2/` |
+| `tournament-belgian-3` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_belgian_3/` |
+| `tournament-german-1` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_german_1/` |
+| `tournament-german-2` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_german_2/` |
+| `tournament-german-3` | Tournament | Layout-tuned preset from `abalone/players/teams/tournament_german_3/` |
 
 ### Where To Customize AI
 
@@ -193,6 +197,13 @@ Use these preset IDs with `--black-ai` and `--white-ai`:
 - Abdullah AI: edit `abalone/players/teams/abdullah/heuristic.py`
 - Cole AI: edit `abalone/players/teams/cole/heuristic.py`
 - Jonah AI: edit `abalone/players/teams/jonah/heuristic.py`
+- Tournament Standard AI: edit `abalone/players/teams/standard/heuristic.py`
+- Tournament Belgian Daisy 1 AI: edit `abalone/players/teams/tournament_belgian_1/heuristic.py`
+- Tournament Belgian Daisy 2 AI: edit `abalone/players/teams/tournament_belgian_2/heuristic.py`
+- Tournament Belgian Daisy 3 AI: edit `abalone/players/teams/tournament_belgian_3/heuristic.py`
+- Tournament German Daisy 1 AI: edit `abalone/players/teams/tournament_german_1/heuristic.py`
+- Tournament German Daisy 2 AI: edit `abalone/players/teams/tournament_german_2/heuristic.py`
+- Tournament German Daisy 3 AI: edit `abalone/players/teams/tournament_german_3/heuristic.py`
 - Each member preset currently starts with the same copied baseline weights, but those files are independent and can diverge without affecting `default`
 - Adaptive tuning runs do not rewrite these source files; mutable weights are checkpointed under `abalone/eval_runs/`
 
@@ -488,7 +499,7 @@ Final summary:
 Time elapsed: 10m42s
 Iterations completed: 10
 Layout: belgian_daisy
-Agent: tournament-belgian
+Agent: tournament-belgian-1
 Max moves: 80
 
 Average win rate 60.00%

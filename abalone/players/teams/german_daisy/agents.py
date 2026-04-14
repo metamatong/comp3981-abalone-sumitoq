@@ -1,4 +1,4 @@
-"""German Daisy tournament agent."""
+"""German Daisy tournament agents."""
 
 from ...types import AgentDefinition
 from .heuristic import evaluate_german_daisy

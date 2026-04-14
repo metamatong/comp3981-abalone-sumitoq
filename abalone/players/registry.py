@@ -9,9 +9,13 @@ from .teams.abdullah import AGENTS as ABDULLAH_AGENTS
 from .teams.cole import AGENTS as COLE_AGENTS
 from .teams.jonah import AGENTS as JONAH_AGENTS
 from .teams.kyle import AGENTS as KYLE_AGENTS
-from .teams.belgian_daisy import AGENTS as BELGIAN_AGENTS
-from .teams.german_daisy import AGENTS as GERMAN_AGENTS
 from .teams.standard import AGENTS as STANDARD_AGENTS
+from .teams.tournament_belgian_1 import AGENTS as TOURNAMENT_BELGIAN_1_AGENTS
+from .teams.tournament_belgian_2 import AGENTS as TOURNAMENT_BELGIAN_2_AGENTS
+from .teams.tournament_belgian_3 import AGENTS as TOURNAMENT_BELGIAN_3_AGENTS
+from .teams.tournament_german_1 import AGENTS as TOURNAMENT_GERMAN_1_AGENTS
+from .teams.tournament_german_2 import AGENTS as TOURNAMENT_GERMAN_2_AGENTS
+from .teams.tournament_german_3 import AGENTS as TOURNAMENT_GERMAN_3_AGENTS
 
 ALL_AGENTS: List[AgentDefinition] = [
     # Comment out any you dont want to use when testing in terminal
@@ -20,9 +24,13 @@ ALL_AGENTS: List[AgentDefinition] = [
     *ABDULLAH_AGENTS,
     *COLE_AGENTS,
     *JONAH_AGENTS,
-    *BELGIAN_AGENTS,
-    *GERMAN_AGENTS,
     *STANDARD_AGENTS,
+    *TOURNAMENT_BELGIAN_1_AGENTS,
+    *TOURNAMENT_BELGIAN_2_AGENTS,
+    *TOURNAMENT_BELGIAN_3_AGENTS,
+    *TOURNAMENT_GERMAN_1_AGENTS,
+    *TOURNAMENT_GERMAN_2_AGENTS,
+    *TOURNAMENT_GERMAN_3_AGENTS,
 ]
 
 AGENTS_BY_ID: Dict[str, AgentDefinition] = {agent.id: agent for agent in ALL_AGENTS}
