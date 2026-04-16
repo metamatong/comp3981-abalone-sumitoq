@@ -698,11 +698,20 @@ abalone/
     config.py      # mode/layout/timer configuration
   players/
     registry.py    # selectable AI preset registry + runtime override helpers
-    teams/         # Kyle / Abdullah / Cole / Jonah agent packages
+    teams/         # Kyle / Abdullah / Cole / Jonah + tournament agent packages
       kyle/        # Kyle-owned agents.py + heuristic.py
       abdullah/    # Abdullah-owned agents.py + heuristic.py
       cole/        # Cole-owned agents.py + heuristic.py
       jonah/       # Jonah-owned agents.py + heuristic.py
+      standard/    # Tournament standard layout agent
+      belgian_daisy/     # Shared Belgian Daisy evaluator (used by tournament_belgian_*)
+      german_daisy/      # Shared German Daisy evaluator (used by tournament_german_*)
+      tournament_belgian_1/  # Tournament Belgian Daisy 1 agent
+      tournament_belgian_2/  # Tournament Belgian Daisy 2 agent
+      tournament_belgian_3/  # Tournament Belgian Daisy 3 agent
+      tournament_german_1/   # Tournament German Daisy 1 agent
+      tournament_german_2/   # Tournament German Daisy 2 agent
+      tournament_german_3/   # Tournament German Daisy 3 agent
     validator.py   # shared move payload + legality validation
     agent.py       # compatibility shim -> ai/agent.py
     minimax.py     # compatibility shim -> ai/minimax.py
@@ -716,11 +725,21 @@ abalone/
     style.css      # Web UI - all CSS styles
     script.js      # Web UI - all JS logic (state, rendering, API calls)
 tests/
+  test_agent_runtime.py
+  test_compat_shims.py
   test_duel.py
   test_duel_tuning.py
+  test_edge_pressure.py
+  test_endgame_tiebreaks.py
+  test_game_config.py
   test_last_move_indicator.py
+  test_native_parity.py
   test_players.py
+  test_profile_runner.py
+  test_registry.py
   test_session_modes.py
+  test_state_space_files.py
+  test_terminal_search.py
 run.py             # Runner: web / cli / state / match / duel
 ```
 

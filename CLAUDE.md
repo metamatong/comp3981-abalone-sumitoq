@@ -2,41 +2,36 @@
 
 ## What Is This?
 
-A fully playable Abalone board game (web UI + terminal) with a state-space generator for AI research. Pure Python 3.8+ — zero external dependencies.
+A fully playable Abalone board game (web UI + terminal) with AI opponents, a state-space generator, local AI benchmarking, and adaptive heuristic tuning. Python 3 with a compiled C native extension (`abalone._native`) for move generation, evaluation, and search.
 
 ## Quick Start
 
+Build the native extension first, then run:
+
 ```bash
-python run.py          # Web UI at http://localhost:8080 (opens browser)
-python run.py cli      # Terminal UI
-python run.py state    # State-space analysis (prints legal move summary)
+python3 setup.py build_ext --inplace   # Build native extension
+python3 run.py                          # Web UI (opens browser)
+python3 run.py cli                      # Terminal UI
+python3 run.py state                    # State-space analysis
+python3 run.py match                    # Benchmark two presets
+python3 run.py duel                     # Single duel, gauntlet, or tuning
 ```
 
 ## Project Structure
 
 ```
-run.py                  # Entry point — routes to web/cli/state mode
+run.py                  # Entry point — routes to web/cli/state/match/duel mode
 abalone/
-  board.py              # Core: Board, Move, positions, validation, apply
-  state_space.py        # Move generation: raw (840) and legal (deduplicated)
-  game.py               # CLI game loop with undo, move parsing, text display
-  server.py             # HTTP server + JSON API (global game state)
-  main.py               # CLI/state-space entry point
-  static/
-    index.html          # Web UI — HTML structure and layout
-    style.css           # Web UI — all CSS styles
-    script.js           # Web UI — all JS logic (state, rendering, API calls)
-```
-
-## Architecture
-
-All game logic lives in Python. The browser is a stateless display layer — it fetches JSON state from the server and sends user actions as API calls.
-
-```
-Browser (static/)              Python (abalone/)
-  SVG board render  <── GET /api/state ──  board.py + state_space.py
-  click to move     ── POST /api/move ──>  server.py  (global state)
-  undo / reset      ── POST /api/undo|reset ──>
+  _native_src/          # C source files for the abalone._native extension
+  ai/                   # Native-backed search, heuristics, agent types
+  eval/                 # Reusable gauntlet runners + adaptive tuning
+  game/                 # Board, CLI, server, session, config, duel orchestration
+  players/              # Preset registry + team-owned AI configs
+    teams/              # Kyle / Abdullah / Cole / Jonah + tournament agents
+  state_space.py        # Python wrapper over native legal move generation
+  static/               # Web UI (HTML, CSS, JS)
+tests/                  # Unit and integration tests
+dist/                   # Packaged executable (SumitoQ.exe)
 ```
 
 ## Key Conventions
@@ -45,31 +40,47 @@ Browser (static/)              Python (abalone/)
 - **Player constants**: `BLACK = 1`, `WHITE = 2`, `EMPTY = 0`.
 - **Directions**: 6 hex directions as `(dr, dc)` tuples — E, W, NW, SE, NE, SW.
 - **Move dataclass**: `Move(marbles, direction)` is frozen/immutable for hashability.
+- **Native extension**: heavy computation (move generation, evaluation, search) runs in compiled C via `abalone._native`.
 - **Type hints**: used throughout with `typing` module aliases (`Position`, `Direction`).
-- **No external deps**: only Python stdlib (`http.server`, `json`, `dataclasses`, `typing`).
 
-## API Endpoints
+## API Endpoints (Web UI)
 
-| Method | Path         | Body                                          | Returns                    |
-|--------|--------------|-----------------------------------------------|----------------------------|
-| GET    | `/api/state` | —                                             | Full game state as JSON    |
-| POST   | `/api/move`  | `{"marbles": ["e5"], "direction": [0, 1]}`    | `{"ok": true, "result": …}` |
-| POST   | `/api/undo`  | —                                             | `{"ok": true}`             |
-| POST   | `/api/reset` | —                                             | `{"ok": true}`             |
+| Method | Path             | Description                                      |
+|--------|------------------|--------------------------------------------------|
+| GET    | `/api/state`     | Full game state as JSON                          |
+| POST   | `/api/move`      | Apply a move `{marbles: ["e5"], direction: [0,1]}` |
+| POST   | `/api/agent-move`| Apply one AI move for current AI-controlled turn |
+| POST   | `/api/config`    | Set game config (mode, layout, timers, AI presets) |
+| POST   | `/api/undo`      | Undo last move                                   |
+| POST   | `/api/reset`     | New game                                         |
+| POST   | `/api/pause`     | Toggle pause/resume                              |
+| POST   | `/api/resign`    | Current player resigns                           |
 
 ## Common Tasks
 
-- **Add a new API endpoint**: edit `server.py` — add route in `do_GET`/`do_POST`, implement handler function.
-- **Change game rules**: edit `board.py` — validation in `is_legal_move()`, execution in `apply_move()`.
-- **Modify UI**: edit files in `abalone/static/` — styles in `style.css`, logic in `script.js`, layout in `index.html`.
-- **Change move generation**: edit `state_space.py` — `generate_legal_moves()` for deduplication/validation.
+- **Add a new API endpoint**: edit `abalone/game/server.py`.
+- **Change game rules**: edit `abalone/game/board.py` — `is_legal_move()`, `apply_move()`.
+- **Modify UI**: edit files in `abalone/static/`.
+- **Change AI heuristics**: edit team files in `abalone/players/teams/<name>/heuristic.py`.
+- **Change move generation**: edit native C source in `abalone/_native_src/movegen.c`.
+- **Modify search**: edit `abalone/_native_src/search.c` or `abalone/ai/minimax.py`.
 
 ## Testing
 
-No formal test suite. Verify manually:
+```bash
+python3 -m unittest discover -s tests    # Run all tests
+python3 run.py state                     # Should show 44 legal moves from starting position
+python3 run.py cli                       # Interactive play — type "help" for commands
+python3 run.py                           # Web UI — click marbles and test moves
+```
+
+## Packaging
+
+Build the executable with PyInstaller using `SumitoQ.spec`:
 
 ```bash
-python run.py state    # Should show 44 legal moves from starting position
-python run.py cli      # Interactive play — type "help" for commands
-python run.py          # Web UI — click marbles and test moves
+python3 setup.py build_ext --inplace
+python3 -m PyInstaller --noconfirm --clean SumitoQ.spec
 ```
+
+Produces `dist/SumitoQ.exe`. End users don't need Python or build tools.
